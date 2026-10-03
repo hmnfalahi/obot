@@ -143,7 +143,7 @@ Obot یک **کارخانه‌ی ربات هوش مصنوعی روی تلگرام
 | زبان بک‌اند / مدیریت پکیج | Python + **uv** |
 | وب‌سرور | **FastAPI** (Webhook تلگرام + API پنل) |
 | تلگرام | **aiogram 3** (متدهای جدید Bot API در صورت نبود، با فراخوانی خام) |
-| صف و پردازش پس‌زمینه | **Taskiq + Redis** |
+| صف و پردازش پس‌زمینه | فاز ۱: درون‌فرایندی (`obot.jobs`، قفل per-chat، `FOR UPDATE SKIP LOCKED` برای کارها)؛ Taskiq وقتی چند نمونه لازم شد |
 | دیتابیس | **PostgreSQL + pgvector** |
 | ORM / Migration | SQLAlchemy 2 (async) + Alembic |
 | ایجنت / LLM | **Pydantic AI** + OpenRouter |

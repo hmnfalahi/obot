@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +48,11 @@ class Settings(BaseSettings):
 
     # Public HTTPS URL of the mini app (in development: the cloudflared tunnel)
     miniapp_url: str | None = None
+
+    # How the server process receives Telegram updates
+    update_mode: Literal["polling", "webhook"] = "webhook"
+    # Error reporting; disabled when unset
+    sentry_dsn: str | None = None
 
     # Public HTTPS origin Telegram sends webhooks to, e.g. https://obot.example.com
     public_base_url: str | None = None

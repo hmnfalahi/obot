@@ -1,5 +1,4 @@
 import enum
-import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -89,7 +88,6 @@ async def register_managed_bot(
             username=info.username,
             display_name=info.display_name,
             token_encrypted=cipher.encrypt(token, context),
-            webhook_secret=secrets.token_urlsafe(32),
             status=await _status_within_limit(session, owner, max_bots),
         )
         session.add(bot)

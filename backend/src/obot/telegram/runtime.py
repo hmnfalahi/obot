@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import httpx
 from aiogram import Bot, Dispatcher
@@ -9,8 +10,19 @@ from obot.billing.plans import Pricing
 from obot.core.llm import ModelRegistry
 from obot.core.memory import Embedder
 from obot.crypto import TokenCipher
-from obot.telegram.polling import PollingManager
 from obot.telegram.sender import Sender
+
+
+class Transport(Protocol):
+    """How updates reach us: PollingManager (development) or WebhookManager (production)."""
+
+    def is_running(self, tg_bot_id: int) -> bool: ...
+
+    async def start(self, bot: Bot, dispatcher: Dispatcher) -> None: ...
+
+    async def stop(self, tg_bot_id: int) -> None: ...
+
+    async def stop_all(self) -> None: ...
 
 
 @dataclass
@@ -32,6 +44,7 @@ class Runtime:
     tavily_api_key: str | None
     sender: Sender
     embedder: Embedder
+    transport: Transport = field(repr=False, default=None)  # set once the factory is known
     miniapp_url: str | None = None
     admins: frozenset[int] = frozenset()
     # Abuse reports one person may send per day
@@ -43,10 +56,8 @@ class Runtime:
         base = self.miniapp_url.rstrip("/")
         return f"{base}/?bot={bot_id}" if bot_id else f"{base}/"
 
-    polling: PollingManager = field(default_factory=PollingManager)
-
     async def launch_bot(self, token: str) -> None:
-        await self.polling.start(Bot(token), self.bots_dispatcher)
+        await self.transport.start(Bot(token), self.bots_dispatcher)
 
     async def stop_bot(self, tg_bot_id: int) -> None:
-        await self.polling.stop(tg_bot_id)
+        await self.transport.stop(tg_bot_id)

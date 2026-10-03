@@ -4,10 +4,17 @@ AI bot factory on Telegram. Product and technical decisions live in `docs/SPEC.m
 
 ## Layout
 
-- `backend/` — Python 3.13 (uv). FastAPI (`obot.api`), Taskiq workers, aiogram 3 for Telegram. Source in `backend/src/obot/`.
+- `backend/` — Python 3.13 (uv). FastAPI (`obot.api`), aiogram 3 for Telegram; background jobs (scheduled tasks, memory, retention) run in-process via `obot.jobs`. Source in `backend/src/obot/`.
 - `miniapp/` — Telegram Mini App, Vite + React + TypeScript.
 - `compose.yaml` — local dev infrastructure (Postgres + pgvector on port 5433, Redis on 6380).
-- `docs/` — spec and design notes.
+- `deploy/` — production stack (Docker Compose: app, Postgres, Redis, Caddy, backups); see `docs/DEPLOY.md`.
+- `docs/` — spec, spike notes and deployment guide.
+
+## Processes
+
+- Development: `obot.telegram.run` (factory + bots by long polling, plus background jobs) and `obot.api.app` (mini app API) run separately; Vite proxies `/api`.
+- Production: one `obot.server` process serves the API, Telegram webhooks (`/tg/...`) and background jobs. Run exactly one instance.
+- Never run development polling and production webhooks with the same factory bot at once.
 
 ## Commands
 
@@ -15,8 +22,10 @@ AI bot factory on Telegram. Product and technical decisions live in `docs/SPEC.m
 docker compose up -d                        # dev infra
 cd backend && uv run pytest                 # tests
 cd backend && uv run ruff check . && uv run ruff format .
+cd backend && uv run python -m obot.telegram.run   # bots (polling)
 cd backend && uv run uvicorn obot.api.app:app --reload
 cd miniapp && npm run dev
+cd deploy && docker compose up -d --build          # production stack
 ```
 
 ## Rules

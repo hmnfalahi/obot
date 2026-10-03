@@ -1,0 +1,16 @@
+# DOMAIN is a hostname (automatic HTTPS) or ":80" behind a tunnel in local tests.
+{$DOMAIN} {
+	encode zstd gzip
+
+	@server path /api/* /tg/* /health
+	handle @server {
+		reverse_proxy app:8000
+	}
+
+	handle {
+		root * /srv/miniapp
+		# The panel is a single-page app; every other path serves it.
+		try_files {path} /index.html
+		file_server
+	}
+}

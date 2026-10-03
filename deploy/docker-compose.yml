@@ -1,0 +1,87 @@
+# Production stack. Run from this directory: docker compose up -d --build
+# Configuration comes from deploy/.env (see .env.example).
+name: obot-prod  # distinct from the dev project in ../compose.yaml (shared volumes otherwise)
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: obot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: obot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obot"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+
+  app:
+    build: ../backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OBOT_DATABASE_URL: postgresql+asyncpg://obot:${POSTGRES_PASSWORD}@db:5432/obot
+      OBOT_REDIS_URL: redis://redis:6379/0
+      OBOT_PUBLIC_BASE_URL: ${PUBLIC_URL:?set PUBLIC_URL}
+      OBOT_MINIAPP_URL: ${PUBLIC_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  caddy:
+    build:
+      context: ../miniapp
+      dockerfile: ../deploy/Caddy.Dockerfile
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+  # Daily compressed dump, keeping a week of backups in deploy/backups.
+  backup:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: obot
+      PGDATABASE: obot
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          pg_dump -Fc -f /backups/obot-$$(date +%F).dump && echo "backup ok"
+          find /backups -name '*.dump' -mtime +7 -delete
+          sleep 86400
+        done
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
