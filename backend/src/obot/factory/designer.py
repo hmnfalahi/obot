@@ -10,6 +10,7 @@ import re
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -52,8 +53,10 @@ class BotDraft(BaseModel):
     tasks: list[str] = Field(
         default_factory=list,
         description=(
-            "Scheduled or recurring jobs the user asked for, each as one precise sentence "
-            "with time, timezone if known, action and destination."
+            "Scheduled jobs the user asked for, each as one precise sentence with action, "
+            "destination and time. Keep one-off requests one-off with their date (e.g. "
+            "'Today 2026-10-03 at 15:52, ...') and recurring ones recurring ('Every day at "
+            "08:00, ...'). Mention a timezone only if the user did."
         ),
     )
 
@@ -125,6 +128,10 @@ def build_prompt(
     return "\n\n".join(parts)
 
 
+def dated_prompt(prompt: str, now: datetime) -> str:
+    return f"Now: {now:%Y-%m-%d %H:%M} UTC\n\n{prompt}"
+
+
 async def design(
     model: Model,
     message: str,
@@ -133,7 +140,8 @@ async def design(
     last_reply: str | None = None,
 ) -> DesignerResult:
     agent = Agent(model, output_type=DesignerOutput, instructions=_instructions())
-    result = await agent.run(build_prompt(message, current, existing, last_reply))
+    prompt = build_prompt(message, current, existing, last_reply)
+    result = await agent.run(dated_prompt(prompt, datetime.now(UTC)))
     return DesignerResult(
         output=result.output,
         model_name=model.model_name,

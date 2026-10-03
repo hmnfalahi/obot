@@ -38,7 +38,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.edit": "📝 Changes to @{username}",
         "card.tools": "Tools",
         "card.tasks": "Tasks",
-        "card.tasks_note": "(scheduling is coming soon)",
+        "card.tasks_note": "",
         "card.hint": "Send a message to change anything.",
         "btn.create": "✅ Create bot",
         "btn.save": "💾 Save",
@@ -51,6 +51,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.rss": "RSS feeds",
         "tool.memory": "memory",
         "forget.done": "Done — I forgot everything about this chat.",
+        "tasks.scheduled": "⏰ Scheduled for @{username}:",
+        "tasks.next": "next: {when}",
+        "tasks.rejected": "⚠️ Not scheduled:",
+        "tasks.waiting": "Tasks that message you start after you press Start in @{username}.",
+        "tasks.none": "@{username} has no scheduled tasks now.",
+        "owner.task_waiting": (
+            "@{username} has a scheduled task for you, but you haven't pressed Start in it yet."
+        ),
+        "owner.task_failed": '⚠️ Task "{summary}" of @{username} failed: {error}',
         "forget.admins_only": "Only group admins can do that.",
     },
     "fa": {
@@ -89,7 +98,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.edit": "📝 تغییرات @{username}",
         "card.tools": "ابزارها",
         "card.tasks": "کارها",
-        "card.tasks_note": "(زمان‌بندی به‌زودی اضافه می‌شه)",
+        "card.tasks_note": "",
         "card.hint": "برای تغییر هر چیزی پیام بده.",
         "btn.create": "✅ ساخت ربات",
         "btn.save": "💾 ذخیره",
@@ -102,6 +111,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.rss": "خبرخوان RSS",
         "tool.memory": "حافظه",
         "forget.done": "انجام شد — هر چی درباره‌ی این چت می‌دونستم پاک شد.",
+        "tasks.scheduled": "⏰ زمان‌بندی‌شده برای @{username}:",
+        "tasks.next": "اجرای بعدی: {when}",
+        "tasks.rejected": "⚠️ زمان‌بندی نشد:",
+        "tasks.waiting": (
+            "کارهایی که برای تو پیام می‌فرستن، بعد از زدن Start در @{username} شروع می‌شن."
+        ),
+        "tasks.none": "@{username} الان کار زمان‌بندی‌شده‌ای نداره.",
+        "owner.task_waiting": (
+            "@{username} یه کار زمان‌بندی‌شده برات داره، ولی هنوز Start رو توش نزدی."
+        ),
+        "owner.task_failed": "⚠️ کار «{summary}» از @{username} اجرا نشد: {error}",
         "forget.admins_only": "فقط ادمین‌های گروه می‌تونن این کار رو بکنن.",
     },
 }

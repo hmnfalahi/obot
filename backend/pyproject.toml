@@ -10,6 +10,7 @@ dependencies = [
     "aiogram>=3.31.0",
     "alembic>=1.20.0",
     "asyncpg>=0.31.0",
+    "cronsim>=2.7",
     "cryptography>=50.0.2",
     "fastapi>=0.142.2",
     "feedparser>=6.0.14",
