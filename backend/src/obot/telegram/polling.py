@@ -26,7 +26,6 @@ class PollingManager:
     async def start(self, bot: Bot, dispatcher: Dispatcher) -> None:
         """Start polling `bot`, replacing any poller already running for it."""
         await self.stop(bot.id)
-        await bot.delete_webhook()
         self._tasks[bot.id] = asyncio.create_task(
             self._poll(bot, dispatcher), name=f"poll-{bot.id}"
         )
@@ -45,9 +44,14 @@ class PollingManager:
         allowed = dispatcher.resolve_used_update_types()
         offset: int | None = None
         backoff = 1
+        webhook_cleared = False
         try:
             while True:
                 try:
+                    if not webhook_cleared:
+                        # getUpdates fails while a webhook is set.
+                        await bot.delete_webhook()
+                        webhook_cleared = True
                     updates = await bot.get_updates(
                         offset=offset, timeout=POLL_TIMEOUT, allowed_updates=allowed
                     )
