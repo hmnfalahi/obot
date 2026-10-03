@@ -7,6 +7,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramNetworkError
+from aiogram.types import User
 from redis.asyncio import Redis
 
 from obot.billing.plans import Pricing
@@ -21,6 +23,19 @@ from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
+
+
+async def get_me_with_retry(bot: Bot, attempts: int = 6) -> User:
+    for attempt in range(attempts):
+        try:
+            return await bot.get_me()
+        except TelegramNetworkError as e:
+            if attempt == attempts - 1:
+                raise
+            delay = 2**attempt
+            log.warning("cannot reach Telegram (%s); retrying in %ss", e, delay)
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 async def main() -> None:
@@ -61,7 +76,7 @@ async def main() -> None:
     factory_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
     factory_dispatcher.include_router(factory.router)
 
-    me = await factory_bot.get_me()
+    me = await get_me_with_retry(factory_bot)
     log.info("factory bot @%s", me.username)
 
     async with runtime.sessionmaker() as session:
