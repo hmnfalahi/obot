@@ -5,6 +5,7 @@ caps work the same for everyone; they are only deducted on plans with
 `uses_credits`.
 """
 
+import asyncio
 import enum
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +20,7 @@ from obot.db.models import Bot, UsageEvent, UsageKind, User
 
 class QuotaReason(enum.StrEnum):
     DAILY_MESSAGES = "daily_messages"
+    DAILY_SEARCHES = "daily_searches"
     BOT_DAILY_CAP = "bot_daily_cap"
     NO_CREDITS = "no_credits"
 
@@ -83,7 +85,6 @@ async def record_llm_usage(
     tokens_in: int,
     tokens_out: int,
 ) -> UsageEvent:
-    cost = pricing.cost_usd(model, tokens_in, tokens_out)
     event = UsageEvent(
         owner_id=owner.id,
         bot_id=bot.id,
@@ -91,11 +92,26 @@ async def record_llm_usage(
         model=model,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
-        cost_usd=cost,
-        credits=pricing.credits_for(cost),
+        cost_usd=pricing.cost_usd(model, tokens_in, tokens_out),
     )
+    return await _record(session, pricing, owner, event)
+
+
+async def record_tool_usage(
+    session: AsyncSession, pricing: Pricing, owner: User, bot: Bot, kind: UsageKind
+) -> UsageEvent:
+    event = UsageEvent(
+        owner_id=owner.id, bot_id=bot.id, kind=kind, cost_usd=pricing.tools[kind.value]
+    )
+    return await _record(session, pricing, owner, event)
+
+
+async def _record(
+    session: AsyncSession, pricing: Pricing, owner: User, event: UsageEvent
+) -> UsageEvent:
+    event.credits = pricing.credits_for(event.cost_usd) if event.cost_usd else 0
     session.add(event)
-    if pricing.plan(owner.plan).uses_credits:
+    if pricing.plan(owner.plan).uses_credits and event.credits:
         # Atomic decrement so concurrent replies cannot overwrite each other;
         # the ORM synchronizes `owner.credit_balance` in the session.
         await session.execute(
@@ -105,3 +121,59 @@ async def record_llm_usage(
         )
     await session.flush()
     return event
+
+
+async def check_tool_quota(
+    session: AsyncSession, pricing: Pricing, owner: User, kind: UsageKind, now: datetime
+) -> QuotaReason | None:
+    plan = pricing.plan(owner.plan)
+    if kind == UsageKind.SEARCH:
+        used = await session.scalar(
+            select(func.count()).where(
+                UsageEvent.owner_id == owner.id,
+                UsageEvent.kind == UsageKind.SEARCH,
+                UsageEvent.created_at >= start_of_day(now, owner.timezone),
+            )
+        )
+        if used >= plan.daily_web_searches:
+            return QuotaReason.DAILY_SEARCHES
+    if plan.uses_credits and pricing.tools[kind.value] and owner.credit_balance <= 0:
+        return QuotaReason.NO_CREDITS
+    return None
+
+
+TOOL_REFUSALS = {
+    QuotaReason.DAILY_SEARCHES: "the owner's daily web search limit is reached",
+    QuotaReason.NO_CREDITS: "the owner is out of credits",
+}
+
+
+class UsageMeter:
+    """ToolMeter backed by the database.
+
+    Tool calls of one reply may run concurrently, but an AsyncSession must not be
+    used concurrently, so every access is serialized.
+    """
+
+    def __init__(
+        self, session: AsyncSession, pricing: Pricing, owner: User, bot: Bot, now: datetime
+    ) -> None:
+        self._session = session
+        self._pricing = pricing
+        self._owner = owner
+        self._bot = bot
+        self._now = now
+        self._lock = asyncio.Lock()
+
+    async def before(self, kind: str) -> str | None:
+        async with self._lock:
+            reason = await check_tool_quota(
+                self._session, self._pricing, self._owner, UsageKind(kind), self._now
+            )
+        return TOOL_REFUSALS[reason] if reason else None
+
+    async def after(self, kind: str) -> None:
+        async with self._lock:
+            await record_tool_usage(
+                self._session, self._pricing, self._owner, self._bot, UsageKind(kind)
+            )

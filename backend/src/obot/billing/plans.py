@@ -26,6 +26,7 @@ class Pricing(BaseModel):
     usd_per_credit: Decimal
     markup: Decimal
     models: dict[str, ModelPrice]
+    tools: dict[str, Decimal]
     plans: dict[str, Plan]
 
     @classmethod

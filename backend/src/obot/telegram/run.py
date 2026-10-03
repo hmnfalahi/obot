@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from obot.billing.plans import Pricing
 from obot.bots.service import list_active_bots
 from obot.config import get_settings
+from obot.core.fetch import make_client
 from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
 from obot.db.session import create_engine, create_sessionmaker
@@ -67,6 +68,10 @@ async def main() -> None:
         redis=redis,
         factory_bot=factory_bot,
         factory_daily_messages=settings.factory_daily_messages,
+        http=make_client(),
+        tavily_api_key=(
+            settings.tavily_api_key.get_secret_value() if settings.tavily_api_key else None
+        ),
     )
 
     runtime.bots_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
@@ -92,6 +97,7 @@ async def main() -> None:
         await asyncio.Event().wait()
     finally:
         await runtime.polling.stop_all()
+        await runtime.http.aclose()
         await redis.aclose()
         await engine.dispose()
 

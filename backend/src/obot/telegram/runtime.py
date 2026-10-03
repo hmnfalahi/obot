@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+import httpx
 from aiogram import Bot, Dispatcher
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,6 +25,9 @@ class Runtime:
     # Used to notify owners (they have all started the factory bot).
     factory_bot: Bot
     factory_daily_messages: int
+    # Shared client for tools (web search, page fetches)
+    http: httpx.AsyncClient
+    tavily_api_key: str | None
     polling: PollingManager = field(default_factory=PollingManager)
 
     async def launch_bot(self, token: str) -> None:
