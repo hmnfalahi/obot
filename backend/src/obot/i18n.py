@@ -15,6 +15,41 @@ MESSAGES: dict[str, dict[str, str]] = {
             "This bot was created but is suspended."
         ),
         "factory.at_limit": "You already have {limit} active bots, the limit of your plan.",
+        "factory.welcome": (
+            "Hi! I build AI bots for you.\n\n"
+            "Just tell me what your bot should do, for example:\n"
+            "• Every morning at 8, get the dollar price from tgju.org and send it to me\n"
+            "• A friendly English tutor that corrects my mistakes\n\n"
+            "Commands: /mybots — your bots, /cancel — drop the current draft"
+        ),
+        "factory.mybots_empty": "You have no bots yet. Describe one and I'll build it.",
+        "factory.mybots_header": 'Your bots (send a message like "make @bot more formal" to edit):',
+        "factory.cancelled": "Draft dropped.",
+        "factory.nothing_to_cancel": "There is no draft to drop.",
+        "factory.daily_limit": "You've sent a lot of messages today. Please continue tomorrow.",
+        "factory.error": "Sorry, something went wrong. Please try again.",
+        "factory.stale": "This draft is no longer active.",
+        "factory.press_create": "Tap the button below to create the bot in Telegram.",
+        "factory.link_fallback": "Button not working (e.g. on iOS)? Use this link:",
+        "factory.ready": "✅ @{username} is ready.",
+        "factory.open_hint": "Open it and press Start so it can message you.",
+        "factory.saved": "✅ Changes to @{username} saved.",
+        "card.new": "📝 New bot draft",
+        "card.edit": "📝 Changes to @{username}",
+        "card.tools": "Tools",
+        "card.tasks": "Tasks",
+        "card.tasks_note": "(scheduling is coming soon)",
+        "card.hint": "Send a message to change anything.",
+        "btn.create": "✅ Create bot",
+        "btn.save": "💾 Save",
+        "btn.cancel": "✖️ Cancel",
+        "btn.create_keyboard": "Create {name}",
+        "btn.create_link": "Create {name} (link)",
+        "btn.open": "Open @{username}",
+        "tool.web_search": "web search",
+        "tool.read_url": "read web pages",
+        "tool.rss": "RSS feeds",
+        "tool.memory": "memory",
     },
     "fa": {
         "quota.daily_messages": "سهمیه‌ی پیام امروزم تموم شده. فردا برمی‌گردم!",
@@ -29,6 +64,41 @@ MESSAGES: dict[str, dict[str, str]] = {
             "الان {limit} ربات فعال داری که سقف پلنته. این ربات ساخته شد ولی غیرفعاله."
         ),
         "factory.at_limit": "الان {limit} ربات فعال داری که سقف پلنته.",
+        "factory.welcome": (
+            "سلام! من برات ربات هوش مصنوعی می‌سازم.\n\n"
+            "فقط بگو رباتت چی کار کنه، مثلاً:\n"
+            "• هر روز ساعت ۸ صبح قیمت دلار رو از tgju.org بگیر و برام بفرست\n"
+            "• یه معلم زبان انگلیسی مهربون که اشتباهاتم رو درست کنه\n\n"
+            "دستورها: /mybots — ربات‌هات، /cancel — حذف پیش‌نویس فعلی"
+        ),
+        "factory.mybots_empty": "هنوز رباتی نداری. توضیح بده چی می‌خوای تا بسازمش.",
+        "factory.mybots_header": "ربات‌هات (برای ویرایش مثلاً بنویس «@bot رو رسمی‌تر کن»):",
+        "factory.cancelled": "پیش‌نویس حذف شد.",
+        "factory.nothing_to_cancel": "پیش‌نویسی برای حذف نیست.",
+        "factory.daily_limit": "امروز پیام زیادی فرستادی. لطفاً فردا ادامه بده.",
+        "factory.error": "ببخشید، مشکلی پیش اومد. لطفاً دوباره امتحان کن.",
+        "factory.stale": "این پیش‌نویس دیگه فعال نیست.",
+        "factory.press_create": "دکمه‌ی زیر رو بزن تا ربات توی تلگرام ساخته بشه.",
+        "factory.link_fallback": "دکمه کار نمی‌کنه (مثلاً روی iOS)؟ از این لینک استفاده کن:",
+        "factory.ready": "✅ @{username} آماده‌ست.",
+        "factory.open_hint": "بازش کن و Start رو بزن تا بتونه بهت پیام بده.",
+        "factory.saved": "✅ تغییرات @{username} ذخیره شد.",
+        "card.new": "📝 پیش‌نویس ربات جدید",
+        "card.edit": "📝 تغییرات @{username}",
+        "card.tools": "ابزارها",
+        "card.tasks": "کارها",
+        "card.tasks_note": "(زمان‌بندی به‌زودی اضافه می‌شه)",
+        "card.hint": "برای تغییر هر چیزی پیام بده.",
+        "btn.create": "✅ ساخت ربات",
+        "btn.save": "💾 ذخیره",
+        "btn.cancel": "✖️ لغو",
+        "btn.create_keyboard": "ساخت {name}",
+        "btn.create_link": "ساخت {name} (لینک)",
+        "btn.open": "باز کردن @{username}",
+        "tool.web_search": "جستجوی وب",
+        "tool.read_url": "خواندن صفحه‌ی وب",
+        "tool.rss": "خبرخوان RSS",
+        "tool.memory": "حافظه",
     },
 }
 

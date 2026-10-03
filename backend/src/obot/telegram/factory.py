@@ -1,13 +1,16 @@
-"""Handlers of the factory bot (@ObotFactory)."""
+"""Handlers of the factory bot (@ObotFactory): design, create and edit bots by chat."""
 
+import html
 import logging
-import secrets
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandStart
+from aiogram.enums import ChatAction, ChatType, ParseMode
+from aiogram.filters import Command, CommandStart
 from aiogram.methods import GetManagedBotToken
 from aiogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -17,6 +20,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.bots.service import (
@@ -26,70 +30,295 @@ from obot.bots.service import (
     get_or_create_user,
     register_managed_bot,
 )
-from obot.db.models import BotStatus
+from obot.db.models import Bot as BotRecord
+from obot.db.models import BotStatus, DraftKind, DraftState, FactoryDraft, User
+from obot.factory.designer import BotDraft, design
+from obot.factory.drafts import (
+    apply_draft,
+    draft_of,
+    existing_bot_drafts,
+    get_active_draft,
+    start_draft,
+    take_awaiting_draft,
+    update_draft,
+)
 from obot.i18n import lang_of, t
+from obot.notices import count_today
+from obot.telegram.profile import sync_profile
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
 
 router = Router(name="factory")
+router.message.filter(F.chat.type == ChatType.PRIVATE)
 
-# Signed 32-bit id echoed back by Telegram; only one create button exists for now.
+# Signed 32-bit id echoed back by Telegram; only one create button exists at a time.
 CREATE_REQUEST_ID = 1
 
 
-SUGGESTED_NAME = "My Obot"
+# --- rendering -------------------------------------------------------------------------
 
 
-def suggest_username() -> str:
-    return f"obot_{secrets.token_hex(3)}_bot"
-
-
-def create_bot_keyboard(suggested_username: str) -> ReplyKeyboardMarkup:
-    button = KeyboardButton(
-        text="Create my bot",
-        request_managed_bot=KeyboardButtonRequestManagedBot(
-            request_id=CREATE_REQUEST_ID,
-            suggested_name=SUGGESTED_NAME,
-            suggested_username=suggested_username,
-        ),
+def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> str:
+    draft = draft_of(row)
+    title = (
+        t(lang, "card.edit", username=target_username) if target_username else t(lang, "card.new")
     )
-    return ReplyKeyboardMarkup(keyboard=[[button]], resize_keyboard=True)
+    lines = [f"<b>{title}</b>", "", f"🤖 <b>{html.escape(draft.name)}</b>"]
+    if draft.description:
+        lines.append(html.escape(draft.description))
+    if draft.tools:
+        tools = ", ".join(t(lang, f"tool.{tool}") for tool in draft.tools)
+        lines += ["", f"🧰 {t(lang, 'card.tools')}: {tools}"]
+    if draft.tasks:
+        lines += ["", f"⏰ {t(lang, 'card.tasks')} {t(lang, 'card.tasks_note')}:"]
+        lines += [f"• {html.escape(task)}" for task in draft.tasks]
+    lines += ["", f"<i>{t(lang, 'card.hint')}</i>"]
+    return "\n".join(lines)
 
 
-def create_bot_link(factory_username: str, suggested_username: str) -> str:
+def card_keyboard(lang: str, row: FactoryDraft) -> InlineKeyboardMarkup:
+    primary = (
+        InlineKeyboardButton(text=t(lang, "btn.save"), callback_data=f"draft:save:{row.id}")
+        if row.kind == DraftKind.EDIT
+        else InlineKeyboardButton(
+            text=t(lang, "btn.create"), callback_data=f"draft:create:{row.id}"
+        )
+    )
+    cancel = InlineKeyboardButton(
+        text=t(lang, "btn.cancel"), callback_data=f"draft:cancel:{row.id}"
+    )
+    return InlineKeyboardMarkup(inline_keyboard=[[primary, cancel]])
+
+
+def create_link(factory_username: str, suggested_username: str, name: str) -> str:
     # Fallback for clients without request_managed_bot support (seen on iOS).
-    return (
-        f"https://t.me/newbot/{factory_username}/{suggested_username}?name={quote(SUGGESTED_NAME)}"
-    )
+    return f"https://t.me/newbot/{factory_username}/{suggested_username}?name={quote(name)}"
+
+
+# --- commands --------------------------------------------------------------------------
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, bot: Bot, session: AsyncSession, runtime: Runtime) -> None:
+async def on_start(message: Message, session: AsyncSession) -> None:
     user = message.from_user
-    owner = await get_or_create_user(session, user.id, user.language_code)
+    await get_or_create_user(session, user.id, user.language_code)
+    await message.answer(t(lang_of(user.language_code), "factory.welcome"))
+
+
+@router.message(Command("mybots"))
+async def on_mybots(message: Message, session: AsyncSession) -> None:
+    lang = lang_of(message.from_user.language_code)
+    owner = await get_or_create_user(session, message.from_user.id)
+    bots = list(
+        await session.scalars(
+            select(BotRecord).where(BotRecord.owner_id == owner.id).order_by(BotRecord.id)
+        )
+    )
+    if not bots:
+        await message.answer(t(lang, "factory.mybots_empty"))
+        return
+    lines = [t(lang, "factory.mybots_header"), ""]
+    for bot in bots:
+        status = "" if bot.status == BotStatus.ACTIVE else f" ({bot.status})"
+        lines.append(f"• @{bot.username} — {bot.display_name}{status}")
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("cancel"))
+async def on_cancel(message: Message, session: AsyncSession) -> None:
+    lang = lang_of(message.from_user.language_code)
+    owner = await get_or_create_user(session, message.from_user.id)
+    row = await get_active_draft(session, owner)
+    if row is None:
+        await message.answer(t(lang, "factory.nothing_to_cancel"))
+        return
+    row.state = DraftState.CANCELLED
+    await message.answer(t(lang, "factory.cancelled"), reply_markup=ReplyKeyboardRemove())
+
+
+# --- designing ---------------------------------------------------------------------------
+
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def on_text(message: Message, session: AsyncSession, runtime: Runtime) -> None:
+    lang = lang_of(message.from_user.language_code)
+    owner = await get_or_create_user(session, message.from_user.id, message.from_user.language_code)
+    now = datetime.now(UTC)
+    used = await count_today(runtime.redis, f"factory:{owner.id}", now, owner.timezone)
+    if used > runtime.factory_daily_messages:
+        await message.answer(t(lang, "factory.daily_limit"))
+        return
+
+    active = await get_active_draft(session, owner)
+    existing = await existing_bot_drafts(session, owner)
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    try:
+        result = await design(
+            runtime.models.for_tier("cheap"),
+            message.text,
+            current=draft_of(active) if active else None,
+            existing=existing,
+            last_reply=active.last_reply if active else None,
+        )
+    except Exception:
+        log.exception("designer failed for user %s", owner.id)
+        await message.answer(t(lang, "factory.error"))
+        return
+    log.info(
+        "designer for user %s: %s (%d in / %d out tokens)",
+        owner.id,
+        result.output.action,
+        result.input_tokens,
+        result.output_tokens,
+    )
+
+    output = result.output
+    reply = "\n".join([output.reply, *(f"• {q}" for q in output.questions)])
+    if output.action != "draft" or output.draft is None:
+        await message.answer(reply)
+        return
+
+    target = await _find_target(session, owner, output.target_bot)
+    row = await _save_designer_draft(session, owner, active, output.draft, reply, target)
+    target_bot = await session.get(BotRecord, row.bot_id) if row.kind == DraftKind.EDIT else None
+
+    await message.answer(reply)
+    await message.answer(
+        render_card(lang, row, target_bot.username if target_bot else None),
+        parse_mode=ParseMode.HTML,
+        reply_markup=card_keyboard(lang, row),
+    )
+
+
+async def _find_target(
+    session: AsyncSession, owner: User, username: str | None
+) -> BotRecord | None:
+    if not username:
+        return None
+    return await session.scalar(
+        select(BotRecord).where(
+            BotRecord.owner_id == owner.id, BotRecord.username == username.lstrip("@")
+        )
+    )
+
+
+async def _save_designer_draft(
+    session: AsyncSession,
+    owner: User,
+    active: FactoryDraft | None,
+    draft: BotDraft,
+    reply: str,
+    target: BotRecord | None,
+) -> FactoryDraft:
+    """Continue the active draft unless the designer switched to another bot."""
+    if active is not None and (target is None or active.bot_id == target.id):
+        return await update_draft(session, active, draft, reply)
+    return await start_draft(session, owner, draft, reply, target=target)
+
+
+# --- draft buttons -----------------------------------------------------------------------
+
+
+async def _own_open_draft(
+    session: AsyncSession, query: CallbackQuery, draft_id: int
+) -> tuple[User, FactoryDraft] | None:
+    owner = await get_or_create_user(session, query.from_user.id)
+    row = await session.get(FactoryDraft, draft_id)
+    if (
+        row is None
+        or row.user_id != owner.id
+        or row.state
+        not in (
+            DraftState.OPEN,
+            DraftState.AWAITING_CREATION,
+        )
+    ):
+        await query.answer(t(lang_of(query.from_user.language_code), "factory.stale"))
+        return None
+    return owner, row
+
+
+@router.callback_query(F.data.startswith("draft:create:"))
+async def on_create(
+    query: CallbackQuery, bot: Bot, session: AsyncSession, runtime: Runtime
+) -> None:
+    lang = lang_of(query.from_user.language_code)
+    found = await _own_open_draft(session, query, int(query.data.rsplit(":", 1)[1]))
+    if found is None:
+        return
+    owner, row = found
     limit = runtime.pricing.plan(owner.plan).max_bots
     if await count_active_bots(session, owner) >= limit:
-        await message.answer(t(lang_of(user.language_code), "factory.at_limit", limit=limit))
+        await query.answer()
+        await query.message.answer(t(lang, "factory.at_limit", limit=limit))
         return
-    username = suggest_username()
-    await message.answer(
-        "Hi! I build AI bots for you. Tap the button to create one.",
-        reply_markup=create_bot_keyboard(username),
-    )
-    me = await bot.me()
-    await message.answer(
-        "Button not working? Use this link instead:",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
+
+    row.state = DraftState.AWAITING_CREATION
+    draft = draft_of(row)
+    await query.answer()
+    await query.message.answer(
+        t(lang, "factory.press_create"),
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
                 [
-                    InlineKeyboardButton(
-                        text="Create my bot (link)", url=create_bot_link(me.username, username)
+                    KeyboardButton(
+                        text=t(lang, "btn.create_keyboard", name=draft.name),
+                        request_managed_bot=KeyboardButtonRequestManagedBot(
+                            request_id=CREATE_REQUEST_ID,
+                            suggested_name=draft.name,
+                            suggested_username=row.suggested_username,
+                        ),
                     )
                 ]
+            ],
+            resize_keyboard=True,
+        ),
+    )
+    me = await bot.me()
+    link = create_link(me.username, row.suggested_username, draft.name)
+    await query.message.answer(
+        t(lang, "factory.link_fallback"),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=t(lang, "btn.create_link", name=draft.name), url=link)]
             ]
         ),
     )
+
+
+@router.callback_query(F.data.startswith("draft:save:"))
+async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime) -> None:
+    lang = lang_of(query.from_user.language_code)
+    found = await _own_open_draft(session, query, int(query.data.rsplit(":", 1)[1]))
+    if found is None:
+        return
+    _, row = found
+    target = await session.get(BotRecord, row.bot_id)
+    draft = draft_of(row)
+    await apply_draft(session, row, target)
+    target.display_name = draft.name
+    token = runtime.cipher.decrypt(target.token_encrypted, str(target.tg_bot_id))
+    await sync_profile(token, draft, set_name=True)
+    await query.answer()
+    await query.message.edit_reply_markup(reply_markup=None)
+    await query.message.answer(t(lang, "factory.saved", username=target.username))
+
+
+@router.callback_query(F.data.startswith("draft:cancel:"))
+async def on_cancel_button(query: CallbackQuery, session: AsyncSession) -> None:
+    lang = lang_of(query.from_user.language_code)
+    found = await _own_open_draft(session, query, int(query.data.rsplit(":", 1)[1]))
+    if found is None:
+        return
+    _, row = found
+    row.state = DraftState.CANCELLED
+    await query.answer()
+    await query.message.edit_reply_markup(reply_markup=None)
+    await query.message.answer(t(lang, "factory.cancelled"), reply_markup=ReplyKeyboardRemove())
+
+
+# --- managed bot lifecycle -----------------------------------------------------------------
 
 
 @router.managed_bot()
@@ -100,6 +329,7 @@ async def on_managed_bot(
         return await bot(GetManagedBotToken(user_id=tg_bot_id))
 
     owner = await get_or_create_user(session, update.user.id, update.user.language_code)
+    lang = lang_of(update.user.language_code)
 
     result = await register_managed_bot(
         session,
@@ -115,6 +345,13 @@ async def on_managed_bot(
     )
     log.info("managed bot @%s: %s", update.bot_user.username, result.outcome)
 
+    if result.outcome == RegisterOutcome.CREATED:
+        if row := await take_awaiting_draft(session, owner):
+            await apply_draft(session, row, result.bot)
+            # Keep the name the user confirmed in Telegram's creation dialog.
+            result.bot.display_name = update.bot_user.first_name
+            await sync_profile(result.token, draft_of(row), set_name=False)
+
     if not result.should_run:
         await runtime.stop_bot(update.bot_user.id)
     elif result.outcome != RegisterOutcome.UNCHANGED or not runtime.polling.is_running(
@@ -122,25 +359,32 @@ async def on_managed_bot(
     ):
         await runtime.launch_bot(result.token)
 
-    if result.outcome == RegisterOutcome.CREATED and result.bot.status == BotStatus.SUSPENDED:
+    if result.outcome != RegisterOutcome.CREATED:
+        return
+    if result.bot.status == BotStatus.SUSPENDED:
         limit = runtime.pricing.plan(owner.plan).max_bots
         await bot.send_message(
-            update.user.id, t(lang_of(update.user.language_code), "factory.bot_limit", limit=limit)
+            update.user.id,
+            t(lang, "factory.bot_limit", limit=limit),
+            reply_markup=ReplyKeyboardRemove(),
         )
-
-
-@router.message(F.managed_bot_created)
-async def on_managed_bot_created(message: Message) -> None:
-    username = message.managed_bot_created.bot_user.username
-    await message.answer("✅ Your bot is ready.", reply_markup=ReplyKeyboardRemove())
+        return
+    username = update.bot_user.username
+    await bot.send_message(
+        update.user.id,
+        t(lang, "factory.ready", username=username),
+        reply_markup=ReplyKeyboardRemove(),
+    )
     # A managed bot cannot message its owner until they press Start (see docs/spikes).
-    await message.answer(
-        f"Open @{username} and press Start so it can message you.",
+    await bot.send_message(
+        update.user.id,
+        t(lang, "factory.open_hint"),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"Open @{username}", url=f"https://t.me/{username}?start=init"
+                        text=t(lang, "btn.open", username=username),
+                        url=f"https://t.me/{username}?start=init",
                     )
                 ]
             ]

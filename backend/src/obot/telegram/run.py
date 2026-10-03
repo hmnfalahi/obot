@@ -66,6 +66,7 @@ async def main() -> None:
         pricing=pricing,
         redis=redis,
         factory_bot=factory_bot,
+        factory_daily_messages=settings.factory_daily_messages,
     )
 
     runtime.bots_dispatcher.update.outer_middleware(SessionMiddleware(runtime))

@@ -148,3 +148,51 @@ class UsageEvent(Base):
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8))
     credits: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class DraftKind(enum.StrEnum):
+    NEW = "new"
+    EDIT = "edit"
+
+
+class DraftState(enum.StrEnum):
+    OPEN = "open"
+    # "Create" pressed; waiting for Telegram's managed_bot update.
+    AWAITING_CREATION = "awaiting_creation"
+    APPLIED = "applied"
+    CANCELLED = "cancelled"
+
+
+class FactoryDraft(Base):
+    """A bot design being discussed with the factory bot. See obot.factory.drafts."""
+
+    __tablename__ = "factory_drafts"
+    __table_args__ = (Index("ix_factory_drafts_user_state", "user_id", "state"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # Target bot for edits; the created bot for applied new drafts.
+    bot_id: Mapped[int | None] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    kind: Mapped[DraftKind] = mapped_column(
+        Enum(
+            DraftKind,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
+    state: Mapped[DraftState] = mapped_column(
+        Enum(
+            DraftState,
+            native_enum=False,
+            length=32,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=DraftState.OPEN,
+    )
+    draft: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    suggested_username: Mapped[str | None] = mapped_column(String(64))
+    # Designer's last message, so answers to its questions keep their context.
+    last_reply: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

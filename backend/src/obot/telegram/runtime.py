@@ -23,6 +23,7 @@ class Runtime:
     redis: Redis
     # Used to notify owners (they have all started the factory bot).
     factory_bot: Bot
+    factory_daily_messages: int
     polling: PollingManager = field(default_factory=PollingManager)
 
     async def launch_bot(self, token: str) -> None:
