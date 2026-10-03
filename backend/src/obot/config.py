@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     history_limit: int = 20
 
     plans_file: Path = Path("plans.yaml")
+    # Designer (LLM) messages a user may send to the factory bot per day
+    factory_daily_messages: int = 50
 
     # Optional LLM tracing; enabled when both keys are set
     langfuse_public_key: str | None = None

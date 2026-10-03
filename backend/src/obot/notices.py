@@ -11,3 +11,14 @@ async def first_today(redis: Redis, key: str, now: datetime, timezone: str) -> b
     expires = day_start + timedelta(days=1)
     full_key = f"notice:{key}:{day_start.date().isoformat()}"
     return bool(await redis.set(full_key, 1, nx=True, exat=int(expires.timestamp())))
+
+
+async def count_today(redis: Redis, key: str, now: datetime, timezone: str) -> int:
+    """Increment and return a per-local-day counter."""
+    day_start = start_of_day(now, timezone)
+    full_key = f"count:{key}:{day_start.date().isoformat()}"
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.incr(full_key)
+        pipe.expireat(full_key, int((day_start + timedelta(days=1)).timestamp()))
+        value, _ = await pipe.execute()
+    return value
