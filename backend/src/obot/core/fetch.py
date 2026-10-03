@@ -35,6 +35,14 @@ class FetchResult:
     body: bytes
 
 
+def normalize_url(url: str) -> str:
+    """Models often pass bare hosts like 'tgju.org/page'; assume https for those."""
+    url = url.strip()
+    if "://" not in url:
+        url = f"https://{url.lstrip('/')}"
+    return url
+
+
 async def ensure_public_host(url: str) -> None:
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
@@ -55,6 +63,7 @@ async def ensure_public_host(url: str) -> None:
 
 
 async def fetch(client: httpx.AsyncClient, url: str, max_bytes: int = MAX_BYTES) -> FetchResult:
+    url = normalize_url(url)
     for _ in range(MAX_REDIRECTS + 1):
         await ensure_public_host(url)
         try:

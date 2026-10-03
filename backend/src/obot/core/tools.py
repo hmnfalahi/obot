@@ -5,6 +5,7 @@ Tool failures are returned to the model as text starting with "ERROR:", so the
 bot can tell the user what went wrong instead of failing the whole reply.
 """
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
@@ -15,6 +16,8 @@ import trafilatura
 from pydantic_ai import RunContext, Tool
 
 from obot.core.fetch import FetchError, FetchResult, fetch
+
+log = logging.getLogger(__name__)
 
 MAX_TOOL_TEXT = 8000
 MAX_FEED_ITEMS = 10
@@ -71,6 +74,7 @@ async def web_search(ctx: RunContext[ToolServices], query: str) -> str:
         )
         response.raise_for_status()
     except httpx.HTTPError as e:
+        log.warning("web search failed: %r", e)
         return f"ERROR: web search failed ({type(e).__name__})."
     await services.meter.after("search")
     results = response.json().get("results", [])
@@ -88,6 +92,7 @@ async def read_url(ctx: RunContext[ToolServices], url: str) -> str:
         result = await fetch(services.http, url)
         text = page_text(result)
     except FetchError as e:
+        log.info("read_url %r failed: %s", url, e)
         return f"ERROR: could not read {url}: {e}."
     await services.meter.after("fetch")
     return f"Content of {result.url}:\n\n{text}"
@@ -101,6 +106,7 @@ async def read_rss(ctx: RunContext[ToolServices], url: str) -> str:
     try:
         result = await fetch(services.http, url)
     except FetchError as e:
+        log.info("read_rss %r failed: %s", url, e)
         return f"ERROR: could not read the feed {url}: {e}."
     feed = feedparser.parse(result.body)
     if not feed.entries:
