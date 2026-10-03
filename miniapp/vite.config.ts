@@ -1,7 +1,14 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// https://vite.dev/config/
+// In development the cloudflared tunnel points at this server, which forwards
+// /api to FastAPI so the mini app and its API share one HTTPS origin.
 export default defineConfig({
   plugins: [react()],
+  server: {
+    allowedHosts: ['.trycloudflare.com'],
+    proxy: {
+      '/api': 'http://localhost:8000',
+    },
+  },
 })

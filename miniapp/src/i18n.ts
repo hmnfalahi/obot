@@ -1,0 +1,140 @@
+import { createContext, useContext } from 'react'
+import type { Lang } from './api'
+
+const en = {
+  myBots: 'My bots',
+  newBot: 'New bot',
+  settings: 'Settings',
+  noBots: 'You have no bots yet.',
+  loading: 'Loading…',
+  error: 'Something went wrong',
+  retry: 'Try again',
+  save: 'Save',
+  saved: 'Saved',
+  cancel: 'Cancel',
+  delete: 'Delete',
+  pause: 'Pause',
+  resume: 'Resume',
+  add: 'Add',
+  name: 'Name',
+  description: 'Short description',
+  instructions: 'Instructions (personality and job)',
+  language: 'Bot language',
+  tools: 'Tools',
+  dailyCap: 'Daily credit cap (empty = none)',
+  tasks: 'Scheduled tasks',
+  noTasks: 'No scheduled tasks.',
+  addTaskPlaceholder: 'e.g. every day at 8 send me the dollar price from tgju.org',
+  next: 'Next',
+  toOwner: 'to you',
+  toChat: 'to',
+  lastError: 'Last error',
+  chats: 'Groups and channels',
+  noChats: 'Not in any group or channel.',
+  usage: 'Last 7 days',
+  messages: 'messages',
+  credits: 'credits',
+  notStarted: 'Open the bot and press Start so it can message you.',
+  openBot: 'Open bot',
+  rejected: 'Not scheduled',
+  createInTelegram: 'Create in Telegram',
+  createHint: 'Telegram will ask you to confirm the name and username.',
+  plan: 'Plan',
+  creditBalance: 'Credit balance',
+  messagesToday: 'Messages today',
+  searchesToday: 'Web searches today',
+  appLanguage: 'App language',
+  timezone: 'Timezone',
+  'status.active': 'active',
+  'status.suspended': 'suspended (plan limit)',
+  'status.disabled': 'disabled',
+  'status.waiting_start': 'waiting for Start',
+  'status.paused': 'paused',
+  'status.done': 'done',
+  'tool.web_search': 'Web search',
+  'tool.read_url': 'Read web pages',
+  'tool.rss': 'RSS feeds',
+  'tool.memory': 'Long-term memory',
+}
+
+type Key = keyof typeof en
+
+const fa: Record<Key, string> = {
+  myBots: 'ربات‌های من',
+  newBot: 'ربات جدید',
+  settings: 'تنظیمات',
+  noBots: 'هنوز رباتی نداری.',
+  loading: 'در حال بارگذاری…',
+  error: 'مشکلی پیش اومد',
+  retry: 'دوباره امتحان کن',
+  save: 'ذخیره',
+  saved: 'ذخیره شد',
+  cancel: 'لغو',
+  delete: 'حذف',
+  pause: 'توقف',
+  resume: 'ادامه',
+  add: 'افزودن',
+  name: 'نام',
+  description: 'توضیح کوتاه',
+  instructions: 'دستورالعمل (شخصیت و کار ربات)',
+  language: 'زبان ربات',
+  tools: 'ابزارها',
+  dailyCap: 'سقف اعتبار روزانه (خالی = بدون سقف)',
+  tasks: 'کارهای زمان‌بندی‌شده',
+  noTasks: 'کار زمان‌بندی‌شده‌ای نیست.',
+  addTaskPlaceholder: 'مثلاً هر روز ساعت ۸ قیمت دلار رو از tgju.org برام بفرست',
+  next: 'اجرای بعدی',
+  toOwner: 'برای تو',
+  toChat: 'به',
+  lastError: 'آخرین خطا',
+  chats: 'گروه‌ها و کانال‌ها',
+  noChats: 'عضو هیچ گروه یا کانالی نیست.',
+  usage: '۷ روز گذشته',
+  messages: 'پیام',
+  credits: 'اعتبار',
+  notStarted: 'ربات رو باز کن و Start رو بزن تا بتونه بهت پیام بده.',
+  openBot: 'باز کردن ربات',
+  rejected: 'زمان‌بندی نشد',
+  createInTelegram: 'ساخت در تلگرام',
+  createHint: 'تلگرام ازت می‌خواد نام و یوزرنیم رو تأیید کنی.',
+  plan: 'پلن',
+  creditBalance: 'موجودی اعتبار',
+  messagesToday: 'پیام‌های امروز',
+  searchesToday: 'جستجوهای امروز',
+  appLanguage: 'زبان برنامه',
+  timezone: 'منطقه‌ی زمانی',
+  'status.active': 'فعال',
+  'status.suspended': 'غیرفعال (سقف پلن)',
+  'status.disabled': 'مسدود',
+  'status.waiting_start': 'منتظر Start',
+  'status.paused': 'متوقف',
+  'status.done': 'انجام‌شده',
+  'tool.web_search': 'جستجوی وب',
+  'tool.read_url': 'خواندن صفحه‌ی وب',
+  'tool.rss': 'خبرخوان RSS',
+  'tool.memory': 'حافظه‌ی بلندمدت',
+}
+
+const catalogs: Record<Lang, Record<Key, string>> = { en, fa }
+
+export type Translate = (key: Key | string) => string
+
+export function translator(lang: Lang): Translate {
+  return (key) => catalogs[lang][key as Key] ?? en[key as Key] ?? key
+}
+
+export const I18n = createContext<{ lang: Lang; t: Translate }>({ lang: 'fa', t: translator('fa') })
+
+export const useI18n = () => useContext(I18n)
+
+export function formatDateTime(iso: string, lang: Lang, timeZone: string): string {
+  return new Intl.DateTimeFormat(lang === 'fa' ? 'fa-IR' : 'en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone,
+  }).format(new Date(iso))
+}
+
+export function formatNumber(n: number, lang: Lang): string {
+  return new Intl.NumberFormat(lang === 'fa' ? 'fa-IR' : 'en-US').format(n)
+}

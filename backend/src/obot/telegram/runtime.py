@@ -32,6 +32,14 @@ class Runtime:
     tavily_api_key: str | None
     sender: Sender
     embedder: Embedder
+    miniapp_url: str | None = None
+
+    def panel_url(self, bot_id: int | None = None) -> str | None:
+        if not self.miniapp_url:
+            return None
+        base = self.miniapp_url.rstrip("/")
+        return f"{base}/?bot={bot_id}" if bot_id else f"{base}/"
+
     polling: PollingManager = field(default_factory=PollingManager)
 
     async def launch_bot(self, token: str) -> None:
