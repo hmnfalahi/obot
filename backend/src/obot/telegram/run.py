@@ -7,8 +7,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-from aiogram.exceptions import TelegramNetworkError
-from aiogram.types import User
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
+from aiogram.types import MenuButtonDefault, MenuButtonWebApp, User, WebAppInfo
 from redis.asyncio import Redis
 
 from obot.billing.plans import Pricing
@@ -44,6 +44,20 @@ async def get_me_with_retry(bot: Bot, attempts: int = 6) -> User:
     raise AssertionError("unreachable")
 
 
+async def setup_panel_button(bot: Bot, runtime: Runtime) -> None:
+    """Point the factory's menu button at the mini app, or reset it when there is none."""
+    url = runtime.panel_url()
+    try:
+        if url:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="Panel", web_app=WebAppInfo(url=url))
+            )
+        else:
+            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+    except TelegramAPIError:
+        log.warning("could not set the factory menu button", exc_info=True)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = get_settings()
@@ -77,6 +91,7 @@ async def main() -> None:
         http=make_client(),
         sender=Sender(redis),
         embedder=Embedder(models.client, settings.embedding_model),
+        miniapp_url=settings.miniapp_url,
         tavily_api_key=(
             settings.tavily_api_key.get_secret_value() if settings.tavily_api_key else None
         ),
@@ -100,6 +115,7 @@ async def main() -> None:
         await runtime.launch_bot(token)
     log.info("launched %d managed bots", len(records))
 
+    await setup_panel_button(factory_bot, runtime)
     await runtime.polling.start(factory_bot, factory_dispatcher)
     jobs = [
         asyncio.create_task(run_every("scheduled-tasks", 60, lambda: run_due_tasks(runtime))),

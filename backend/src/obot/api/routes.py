@@ -206,7 +206,13 @@ async def bot_usage(bot: OwnedBot, session: Session, days: int = 7) -> list[Usag
         .group_by(local_day)
         .order_by(local_day)
     )
-    return [UsageDay(day=d, messages=m, credits=c) for d, m, c in rows]
+    by_day = {d: (m, c) for d, m, c in rows}
+    first = since.date()
+    # Every day of the range, oldest first, so clients need no date arithmetic.
+    return [
+        UsageDay(day=day, messages=by_day.get(day, (0, 0))[0], credits=by_day.get(day, (0, 0))[1])
+        for day in (first + timedelta(days=i) for i in range(days))
+    ]
 
 
 @router.post("/bots/drafts")

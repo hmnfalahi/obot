@@ -1,122 +1,69 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { api, type Lang, type Me } from './api'
+import { I18n, translator } from './i18n'
+import { BotPage } from './pages/BotPage'
+import { BotsPage } from './pages/BotsPage'
+import { NewBotPage } from './pages/NewBotPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { startParam, webApp } from './telegram'
+import { ErrorBox, Loading } from './ui'
 
-function App() {
-  const [count, setCount] = useState(0)
+export type Route =
+  | { page: 'bots' }
+  | { page: 'bot'; id: number }
+  | { page: 'new' }
+  | { page: 'settings' }
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+/** The factory opens one bot with ?bot=<id> (web_app button) or start_param "bot_<id>" (link). */
+function initialRoute(): Route {
+  const fromQuery = new URLSearchParams(window.location.search).get('bot')
+  const fromStart = /^bot_(\d+)$/.exec(startParam() ?? '')?.[1]
+  const id = Number(fromQuery ?? fromStart)
+  return id > 0 ? { page: 'bot', id } : { page: 'bots' }
 }
 
-export default App
+export default function App() {
+  const [route, setRoute] = useState<Route>(initialRoute)
+  const [me, setMe] = useState<Me | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadMe = useCallback(() => {
+    api.me().then(
+      (value) => {
+        setMe(value)
+        setError(null)
+      },
+      (e: Error) => setError(e.message),
+    )
+  }, [])
+  useEffect(loadMe, [loadMe])
+
+  const lang: Lang = me?.language ?? (webApp?.initDataUnsafe.user?.language_code === 'fa' ? 'fa' : 'en')
+  const i18n = useMemo(() => ({ lang, t: translator(lang) }), [lang])
+
+  useEffect(() => {
+    document.documentElement.lang = lang
+    document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr'
+  }, [lang])
+
+  // Telegram's back button returns to the bot list from any inner page.
+  useEffect(() => {
+    const back = webApp?.BackButton
+    if (!back) return
+    const goHome = () => setRoute({ page: 'bots' })
+    if (route.page === 'bots') back.hide()
+    else back.show()
+    back.onClick(goHome)
+    return () => back.offClick(goHome)
+  }, [route])
+
+  let content
+  if (error) content = <ErrorBox message={error} onRetry={loadMe} />
+  else if (!me) content = <Loading />
+  else if (route.page === 'bot') content = <BotPage id={route.id} me={me} />
+  else if (route.page === 'new') content = <NewBotPage onDone={() => setRoute({ page: 'bots' })} />
+  else if (route.page === 'settings') content = <SettingsPage me={me} onChange={setMe} />
+  else content = <BotsPage me={me} navigate={setRoute} />
+
+  return <I18n.Provider value={i18n}>{content}</I18n.Provider>
+}

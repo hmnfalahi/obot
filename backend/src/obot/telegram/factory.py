@@ -18,6 +18,7 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    WebAppInfo,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,7 +80,13 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
     return "\n".join(lines)
 
 
-def card_keyboard(lang: str, row: FactoryDraft) -> InlineKeyboardMarkup:
+def panel_button(lang: str, url: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=t(lang, "btn.panel"), web_app=WebAppInfo(url=url))
+
+
+def card_keyboard(
+    lang: str, row: FactoryDraft, panel_url: str | None = None
+) -> InlineKeyboardMarkup:
     primary = (
         InlineKeyboardButton(text=t(lang, "btn.save"), callback_data=f"draft:save:{row.id}")
         if row.kind == DraftKind.EDIT
@@ -90,7 +97,10 @@ def card_keyboard(lang: str, row: FactoryDraft) -> InlineKeyboardMarkup:
     cancel = InlineKeyboardButton(
         text=t(lang, "btn.cancel"), callback_data=f"draft:cancel:{row.id}"
     )
-    return InlineKeyboardMarkup(inline_keyboard=[[primary, cancel]])
+    rows = [[primary, cancel]]
+    if panel_url:
+        rows.append([panel_button(lang, panel_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def render_task_sync(lang: str, bot: BotRecord, sync: TaskSync) -> str:
@@ -144,7 +154,7 @@ async def on_start(message: Message, session: AsyncSession) -> None:
 
 
 @router.message(Command("mybots"))
-async def on_mybots(message: Message, session: AsyncSession) -> None:
+async def on_mybots(message: Message, session: AsyncSession, runtime: Runtime) -> None:
     lang = lang_of(message.from_user.language_code)
     owner = await get_or_create_user(session, message.from_user.id)
     bots = list(
@@ -159,7 +169,9 @@ async def on_mybots(message: Message, session: AsyncSession) -> None:
     for bot in bots:
         status = "" if bot.status == BotStatus.ACTIVE else f" ({bot.status})"
         lines.append(f"• @{bot.username} — {bot.display_name}{status}")
-    await message.answer("\n".join(lines))
+    url = runtime.panel_url()
+    markup = InlineKeyboardMarkup(inline_keyboard=[[panel_button(lang, url)]]) if url else None
+    await message.answer("\n".join(lines), reply_markup=markup)
 
 
 @router.message(Command("cancel"))
@@ -224,7 +236,10 @@ async def on_text(message: Message, session: AsyncSession, runtime: Runtime) -> 
     await message.answer(
         render_card(lang, row, target_bot.username if target_bot else None),
         parse_mode=ParseMode.HTML,
-        reply_markup=card_keyboard(lang, row),
+        # Edits of an existing bot can also be finished in the panel.
+        reply_markup=card_keyboard(
+            lang, row, runtime.panel_url(row.bot_id) if row.kind == DraftKind.EDIT else None
+        ),
     )
 
 

@@ -280,8 +280,9 @@ async def test_usage_by_day(api) -> None:
 
     days = (await api.get(f"/api/bots/{bot_id}/usage", headers=auth(ALICE))).json()
 
-    assert len(days) == 1
-    assert days[0]["messages"] == 1 and days[0]["credits"] >= 1
+    assert len(days) == 7
+    assert days[-1]["messages"] == 1 and days[-1]["credits"] >= 1
+    assert all(d["messages"] == 0 for d in days[:-1])
 
 
 def test_task_model_status_values_match_schema() -> None:

@@ -1,0 +1,137 @@
+import { initData } from './telegram'
+
+export type Lang = 'fa' | 'en'
+export type ToolName = 'web_search' | 'read_url' | 'rss' | 'memory'
+export const TOOLS: ToolName[] = ['web_search', 'read_url', 'rss', 'memory']
+
+export interface Quota {
+  used: number
+  limit: number | null
+}
+
+export interface Me {
+  tg_user_id: number
+  language: Lang
+  timezone: string
+  plan: string
+  credit_balance: number
+  max_bots: number
+  max_tasks: number
+  messages_today: Quota
+  searches_today: Quota
+}
+
+export interface BotSummary {
+  id: number
+  username: string
+  display_name: string
+  status: 'active' | 'suspended' | 'disabled'
+  description: string
+  tools: ToolName[]
+  owner_started: boolean
+}
+
+export interface Chat {
+  id: number
+  title: string | null
+  type: string
+  is_admin: boolean
+}
+
+export interface Task {
+  id: number
+  summary: string
+  instruction: string
+  schedule_kind: 'cron' | 'once'
+  cron: string | null
+  timezone: string
+  destination_chat_id: number
+  to_owner: boolean
+  status: 'active' | 'waiting_start' | 'paused' | 'done' | 'cancelled'
+  next_run_at: string | null
+  last_run_at: string | null
+  last_error: string | null
+}
+
+export interface BotDetail extends BotSummary {
+  system_prompt: string
+  language: string
+  model_tier: string
+  daily_credit_cap: number | null
+  chats: Chat[]
+  tasks: Task[]
+}
+
+export interface BotUpdate {
+  display_name?: string
+  description?: string
+  system_prompt?: string
+  language?: string
+  tools?: ToolName[]
+  daily_credit_cap?: number
+  clear_daily_credit_cap?: boolean
+}
+
+export interface UsageDay {
+  day: string
+  messages: number
+  credits: number
+}
+
+export interface TaskAdd {
+  scheduled: Task[]
+  rejected: { summary: string; reason: string }[]
+}
+
+export interface NewBot {
+  name: string
+  description: string
+  system_prompt: string
+  language: string
+  tools: ToolName[]
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    method,
+    headers: {
+      Authorization: `tma ${initData()}`,
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok) {
+    let detail = response.statusText
+    try {
+      const data = await response.json()
+      detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+    } catch {
+      // keep statusText
+    }
+    throw new ApiError(response.status, detail)
+  }
+  return response.status === 204 ? (undefined as T) : response.json()
+}
+
+export const api = {
+  me: () => request<Me>('GET', '/me'),
+  updateMe: (body: Partial<Pick<Me, 'language' | 'timezone'>>) => request<Me>('PATCH', '/me', body),
+  bots: () => request<BotSummary[]>('GET', '/bots'),
+  bot: (id: number) => request<BotDetail>('GET', `/bots/${id}`),
+  updateBot: (id: number, body: BotUpdate) => request<BotDetail>('PATCH', `/bots/${id}`, body),
+  usage: (id: number, days = 7) => request<UsageDay[]>('GET', `/bots/${id}/usage?days=${days}`),
+  addTask: (id: number, text: string) =>
+    request<TaskAdd>('POST', `/bots/${id}/tasks`, { request: text }),
+  pauseTask: (id: number, paused: boolean) => request<Task>('PATCH', `/tasks/${id}`, { paused }),
+  deleteTask: (id: number) => request<void>('DELETE', `/tasks/${id}`),
+  newBot: (body: NewBot) =>
+    request<{ create_link: string; suggested_username: string }>('POST', '/bots/drafts', body),
+}

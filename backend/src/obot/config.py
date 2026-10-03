@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # Public HTTPS URL of the mini app (in development: the cloudflared tunnel)
+    miniapp_url: str | None = None
+
     # Public HTTPS origin Telegram sends webhooks to, e.g. https://obot.example.com
     public_base_url: str | None = None
 
