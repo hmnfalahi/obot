@@ -1,0 +1,81 @@
+import enum
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    LargeBinary,
+    MetaData,
+    String,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
+class Base(DeclarativeBase):
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    type_annotation_map = {datetime: DateTime(timezone=True)}
+
+
+class BotStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    tg_user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    language: Mapped[str | None] = mapped_column(String(16))
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    plan: Mapped[str] = mapped_column(String(32), default="free")
+    credit_balance: Mapped[int] = mapped_column(BigInteger, default=0)
+    is_disabled: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    bots: Mapped[list["Bot"]] = relationship(back_populates="owner")
+
+
+class Bot(Base):
+    __tablename__ = "bots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    tg_bot_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    username: Mapped[str] = mapped_column(String(64))
+    display_name: Mapped[str] = mapped_column(String(128))
+    # AES-GCM, bound to tg_bot_id; see obot.crypto
+    token_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
+    webhook_secret: Mapped[str] = mapped_column(String(128))
+    persona: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    model_tier: Mapped[str] = mapped_column(String(32), default="cheap")
+    tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[BotStatus] = mapped_column(
+        Enum(
+            BotStatus,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=BotStatus.ACTIVE,
+    )
+    # Telegram does not let a bot message its creator until they press Start.
+    owner_started: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+    owner: Mapped[User] = relationship(back_populates="bots")
