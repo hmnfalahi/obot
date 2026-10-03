@@ -1,0 +1,20 @@
+# Local development infrastructure. Production deployment lives in deploy/.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: obot
+      POSTGRES_PASSWORD: obot
+      POSTGRES_DB: obot
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+volumes:
+  pgdata:
