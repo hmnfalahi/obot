@@ -245,3 +245,68 @@ class MemoryCursor(Base):
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), primary_key=True)
     tg_chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     last_message_id: Mapped[int] = mapped_column(BigInteger)
+
+
+class TaskStatus(enum.StrEnum):
+    ACTIVE = "active"
+    # Destination is the owner's private chat and they have not pressed Start yet.
+    WAITING_START = "waiting_start"
+    PAUSED = "paused"
+    DONE = "done"  # one-off task that ran
+    CANCELLED = "cancelled"  # replaced by a newer configuration
+
+
+class ScheduleKind(enum.StrEnum):
+    CRON = "cron"
+    ONCE = "once"
+
+
+class Task(Base):
+    """A scheduled job of a bot: at each run the agent follows `instruction`."""
+
+    __tablename__ = "tasks"
+    __table_args__ = (
+        Index("ix_tasks_due", "status", "next_run_at"),
+        Index("ix_tasks_bot", "bot_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    instruction: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(String(256))
+    schedule_kind: Mapped[ScheduleKind] = mapped_column(
+        Enum(
+            ScheduleKind,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
+    cron: Mapped[str | None] = mapped_column(String(128))
+    run_at: Mapped[datetime | None]
+    timezone: Mapped[str] = mapped_column(String(64))
+    destination_chat_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[TaskStatus] = mapped_column(
+        Enum(
+            TaskStatus,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=TaskStatus.ACTIVE,
+    )
+    next_run_at: Mapped[datetime | None]
+    last_run_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class TaskRun(Base):
+    __tablename__ = "task_runs"
+    __table_args__ = (Index("ix_task_runs_task", "task_id", "started_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
+    ok: Mapped[bool]
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime]
+    finished_at: Mapped[datetime] = mapped_column(server_default=func.now())

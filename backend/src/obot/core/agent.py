@@ -23,7 +23,9 @@ PLATFORM_RULES = (
     "You are chatting on Telegram. Reply in the language of the user's latest message. "
     "Keep replies concise. Use plain text only: no Markdown, no tables. "
     "Use your tools when the answer needs current or external information. "
-    "If a tool returns an ERROR, tell the user plainly what failed; never invent data."
+    "If a tool returns an ERROR, tell the user plainly what failed; never invent data. "
+    "You cannot schedule reminders or recurring messages yourself and must never promise "
+    "to; tell the user to ask the factory bot that created you to add a scheduled task."
 )
 
 # Model requests per reply, including tool round-trips; bounds cost of tool loops.

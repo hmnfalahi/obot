@@ -26,6 +26,7 @@ from obot.telegram import bots, factory
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.runtime import Runtime
 from obot.telegram.sender import Sender
+from obot.telegram.task_runner import run_due_tasks
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ async def main() -> None:
 
     await runtime.polling.start(factory_bot, factory_dispatcher)
     jobs = [
+        asyncio.create_task(run_every("scheduled-tasks", 60, lambda: run_due_tasks(runtime))),
         asyncio.create_task(
             run_every(
                 "memory-extraction",

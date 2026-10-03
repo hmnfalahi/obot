@@ -40,12 +40,17 @@ class RegisterResult:
         return self.token is not None and self.bot.status == BotStatus.ACTIVE
 
 
+def default_timezone(language: str | None) -> str:
+    """Best guess until users can set it: Persian speakers are mostly in Iran."""
+    return "Asia/Tehran" if (language or "").startswith("fa") else "UTC"
+
+
 async def get_or_create_user(
     session: AsyncSession, tg_user_id: int, language: str | None = None
 ) -> User:
     user = await session.scalar(select(User).where(User.tg_user_id == tg_user_id))
     if user is None:
-        user = User(tg_user_id=tg_user_id, language=language)
+        user = User(tg_user_id=tg_user_id, language=language, timezone=default_timezone(language))
         session.add(user)
         await session.flush()
     return user

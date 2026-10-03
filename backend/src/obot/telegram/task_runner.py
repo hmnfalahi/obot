@@ -1,0 +1,193 @@
+"""Executes due scheduled tasks (SPEC 7.2)."""
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from aiogram import Bot
+from sqlalchemy.orm import joinedload
+
+from obot.billing.usage import UsageMeter, allowed_tier, check_llm_quota, record_llm_usage
+from obot.chat.history import ChatScope, record_message
+from obot.core.agent import BotProfile, generate_reply
+from obot.core.tools import ToolServices, build_tools
+from obot.db.models import Bot as BotRecord
+from obot.db.models import SenderKind, Task
+from obot.i18n import lang_of, t
+from obot.memory.jobs import recall_facts
+from obot.memory.store import MEMORY_TOOL
+from obot.notices import first_today
+from obot.tasks.service import claim_due, record_run
+from obot.telegram.runtime import Runtime
+
+log = logging.getLogger(__name__)
+
+CLAIM_BATCH = 50
+CONCURRENT_RUNS = 8
+
+
+@dataclass(frozen=True)
+class OwnerContact:
+    """Plain values, still usable after a session rollback expired the ORM objects."""
+
+    tg_user_id: int
+    timezone: str
+    language: str | None
+
+
+def task_prompt(task: Task, language: str | None) -> str:
+    # The instruction is in English; without this the reply would follow its language.
+    write_in = f" Write it in the language with ISO code '{language}'." if language else ""
+    return (
+        f"[Scheduled task: {task.summary}]\n{task.instruction}\n\n"
+        f"Write the message to send now.{write_in} "
+        "Do not mention that this is a scheduled task."
+    )
+
+
+async def run_due_tasks(runtime: Runtime) -> None:
+    now = datetime.now(UTC)
+    async with runtime.sessionmaker() as session:
+        due = [(task.id, now) for task in await claim_due(session, now, CLAIM_BATCH)]
+        await session.commit()
+    if not due:
+        return
+    slots = asyncio.Semaphore(CONCURRENT_RUNS)
+
+    async def run(task_id: int, started: datetime) -> None:
+        async with slots:
+            try:
+                await execute_task(runtime, task_id, started)
+            except Exception:
+                log.exception("task %s crashed", task_id)
+
+    await asyncio.gather(*(run(task_id, started) for task_id, started in due))
+
+
+async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> None:
+    async with runtime.sessionmaker() as session:
+        task = await session.get(Task, task_id)
+        bot_record = await session.get(
+            BotRecord, task.bot_id, options=[joinedload(BotRecord.owner)]
+        )
+        owner = bot_record.owner
+        contact = OwnerContact(owner.tg_user_id, owner.timezone, owner.language)
+        username, summary = bot_record.username, task.summary
+        to_owner = task.destination_chat_id == owner.tg_user_id
+
+        if to_owner and not bot_record.owner_started:
+            await record_run(session, task, started, error="owner has not started the bot")
+            await session.commit()
+            await _notify_owner(
+                runtime,
+                contact,
+                f"task-waiting:{bot_record.id}",
+                started,
+                "owner.task_waiting",
+                username=username,
+            )
+            return
+
+        quota = await check_llm_quota(session, runtime.pricing, owner, bot_record, started)
+        if not quota.allowed:
+            await record_run(session, task, started, error=f"quota: {quota.reason}")
+            await session.commit()
+            await _notify_owner(
+                runtime,
+                contact,
+                f"task-quota:{task_id}",
+                started,
+                "owner.task_failed",
+                username=username,
+                summary=summary,
+                error=t(lang_of(contact.language), f"quota.{quota.reason}"),
+            )
+            return
+
+        scope = ChatScope(bot_id=bot_record.id, tg_chat_id=task.destination_chat_id)
+        group = task.destination_chat_id < 0
+        token = runtime.cipher.decrypt(bot_record.token_encrypted, str(bot_record.tg_bot_id))
+        bot = Bot(token)
+        try:
+            prompt = task_prompt(task, (bot_record.persona or {}).get("language"))
+            memories = []
+            if MEMORY_TOOL in (bot_record.tools or []):
+                memories = await recall_facts(
+                    session, runtime.pricing, bot_record, scope, task.instruction, runtime.embedder
+                )
+            tier = allowed_tier(runtime.pricing, owner, bot_record.model_tier)
+            reply = await generate_reply(
+                runtime.models.for_tier(tier),
+                BotProfile(name=bot_record.display_name, persona=bot_record.persona),
+                [],
+                prompt,
+                tools=build_tools(bot_record.tools or []),
+                services=ToolServices(
+                    http=runtime.http,
+                    meter=UsageMeter(session, runtime.pricing, owner, bot_record, started),
+                    tavily_api_key=runtime.tavily_api_key,
+                ),
+                memories=memories,
+            )
+            await record_llm_usage(
+                session,
+                runtime.pricing,
+                owner,
+                bot_record,
+                reply.model_name,
+                reply.input_tokens,
+                reply.output_tokens,
+            )
+            sent = await runtime.sender.send_text(
+                bot, task.destination_chat_id, reply.text, group=group
+            )
+            await record_message(
+                session,
+                scope,
+                sender_kind=SenderKind.SELF,
+                text=reply.text,
+                tg_message_id=sent[-1].message_id if sent else None,
+                sender_tg_id=bot.id,
+                sender_name=bot_record.display_name,
+            )
+            await record_run(session, task, started)
+            await session.commit()
+            log.info("task %s of bot %s ran (%s)", task.id, bot_record.id, task.summary)
+        except Exception as e:
+            log.exception("task %s of bot @%s failed", task_id, username)
+            await session.rollback()
+            task = await session.get(Task, task_id)
+            await record_run(session, task, started, error=f"{type(e).__name__}: {e}"[:1000])
+            await session.commit()
+            await _notify_owner(
+                runtime,
+                contact,
+                f"task-failed:{task_id}",
+                started,
+                "owner.task_failed",
+                username=username,
+                summary=summary,
+                error=type(e).__name__,
+            )
+        finally:
+            await bot.session.close()
+
+
+async def _notify_owner(
+    runtime: Runtime,
+    contact: OwnerContact,
+    key: str,
+    now: datetime,
+    message_key: str,
+    **kwargs: object,
+) -> None:
+    """Tell the owner through the factory bot, at most once a day per key."""
+    if not await first_today(runtime.redis, key, now, contact.timezone):
+        return
+    try:
+        await runtime.factory_bot.send_message(
+            contact.tg_user_id, t(lang_of(contact.language), message_key, **kwargs)
+        )
+    except Exception:
+        log.warning("could not notify owner %s", contact.tg_user_id, exc_info=True)

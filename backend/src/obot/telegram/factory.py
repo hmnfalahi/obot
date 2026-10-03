@@ -44,6 +44,8 @@ from obot.factory.drafts import (
 )
 from obot.i18n import lang_of, t
 from obot.notices import count_today
+from obot.tasks.apply import TaskSync, sync_tasks
+from obot.tasks.schedule import zone
 from obot.telegram.profile import sync_profile
 from obot.telegram.runtime import Runtime
 
@@ -71,7 +73,7 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
         tools = ", ".join(t(lang, f"tool.{tool}") for tool in draft.tools)
         lines += ["", f"🧰 {t(lang, 'card.tools')}: {tools}"]
     if draft.tasks:
-        lines += ["", f"⏰ {t(lang, 'card.tasks')} {t(lang, 'card.tasks_note')}:"]
+        lines += ["", f"⏰ {t(lang, 'card.tasks')}:"]
         lines += [f"• {html.escape(task)}" for task in draft.tasks]
     lines += ["", f"<i>{t(lang, 'card.hint')}</i>"]
     return "\n".join(lines)
@@ -89,6 +91,46 @@ def card_keyboard(lang: str, row: FactoryDraft) -> InlineKeyboardMarkup:
         text=t(lang, "btn.cancel"), callback_data=f"draft:cancel:{row.id}"
     )
     return InlineKeyboardMarkup(inline_keyboard=[[primary, cancel]])
+
+
+def render_task_sync(lang: str, bot: BotRecord, sync: TaskSync) -> str:
+    if not sync.scheduled and not sync.rejected:
+        return t(lang, "tasks.none", username=bot.username)
+    lines = []
+    if sync.scheduled:
+        lines.append(t(lang, "tasks.scheduled", username=bot.username))
+        for task in sync.scheduled:
+            when = task.next_run_at.astimezone(zone(task.timezone)).strftime("%Y-%m-%d %H:%M")
+            lines.append(f"• {task.summary} ({t(lang, 'tasks.next', when=when)})")
+    if sync.rejected:
+        lines += ["", t(lang, "tasks.rejected")]
+        lines += [f"• {r.summary}: {r.reason}" for r in sync.rejected]
+    if not bot.owner_started and any(
+        task.destination_chat_id == bot.owner.tg_user_id for task in sync.scheduled
+    ):
+        lines += ["", t(lang, "tasks.waiting", username=bot.username)]
+    return "\n".join(lines)
+
+
+async def _sync_and_report(
+    bot: Bot,
+    chat_id: int,
+    lang: str,
+    session: AsyncSession,
+    runtime: Runtime,
+    record: BotRecord,
+    requests: list[str],
+) -> None:
+    try:
+        sync = await sync_tasks(
+            session, runtime.pricing, runtime.models.for_tier("cheap"), record, requests
+        )
+    except Exception:
+        log.exception("scheduling tasks of bot %s failed", record.id)
+        await bot.send_message(chat_id, t(lang, "factory.error"))
+        return
+    if requests or sync.rejected:
+        await bot.send_message(chat_id, render_task_sync(lang, record, sync))
 
 
 def create_link(factory_username: str, suggested_username: str, name: str) -> str:
@@ -303,6 +345,9 @@ async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime)
     await query.answer()
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.answer(t(lang, "factory.saved", username=target.username))
+    await _sync_and_report(
+        query.bot, query.message.chat.id, lang, session, runtime, target, draft.tasks
+    )
 
 
 @router.callback_query(F.data.startswith("draft:cancel:"))
@@ -345,12 +390,14 @@ async def on_managed_bot(
     )
     log.info("managed bot @%s: %s", update.bot_user.username, result.outcome)
 
+    created_draft = None
     if result.outcome == RegisterOutcome.CREATED:
         if row := await take_awaiting_draft(session, owner):
+            created_draft = draft_of(row)
             await apply_draft(session, row, result.bot)
             # Keep the name the user confirmed in Telegram's creation dialog.
             result.bot.display_name = update.bot_user.first_name
-            await sync_profile(result.token, draft_of(row), set_name=False)
+            await sync_profile(result.token, created_draft, set_name=False)
 
     if not result.should_run:
         await runtime.stop_bot(update.bot_user.id)
@@ -375,6 +422,10 @@ async def on_managed_bot(
         t(lang, "factory.ready", username=username),
         reply_markup=ReplyKeyboardRemove(),
     )
+    if created_draft is not None and created_draft.tasks:
+        await _sync_and_report(
+            bot, update.user.id, lang, session, runtime, result.bot, created_draft.tasks
+        )
     # A managed bot cannot message its owner until they press Start (see docs/spikes).
     await bot.send_message(
         update.user.id,

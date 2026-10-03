@@ -28,6 +28,7 @@ from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
+from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
 from obot.telegram.runtime import Runtime
 
@@ -49,6 +50,8 @@ async def on_start(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
     first_time = await mark_owner_started(session, bot_record, message.from_user.id)
+    if first_time:
+        await resume_waiting(session, bot_record, datetime.now(UTC))
     text = (
         "All set — I can message you now." if first_time else f"Hi! I'm {bot_record.display_name}."
     )
@@ -105,6 +108,9 @@ async def on_membership(
 async def on_private_text(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
+    # Any private message from the owner opens the chat, not only /start.
+    if await mark_owner_started(session, bot_record, message.from_user.id):
+        await resume_waiting(session, bot_record, datetime.now(UTC))
     scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
     incoming = await _record_incoming(session, scope, message)
     await _respond(message, message.text, incoming, scope, session, bot_record, runtime)
