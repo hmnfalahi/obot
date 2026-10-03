@@ -27,9 +27,14 @@ class FakeTelegram:
 
 
 async def register(
-    session: AsyncSession, cipher: TokenCipher, tg: FakeTelegram, creator: int = CREATOR
+    session: AsyncSession,
+    cipher: TokenCipher,
+    tg: FakeTelegram,
+    creator: int = CREATOR,
+    info: ManagedBotInfo = INFO,
+    max_bots: int = 10,
 ):
-    return await register_managed_bot(session, cipher, tg.fetch_token, creator, INFO)
+    return await register_managed_bot(session, cipher, tg.fetch_token, creator, info, max_bots)
 
 
 async def test_creates_bot_with_encrypted_token(session, cipher) -> None:
@@ -111,3 +116,28 @@ async def test_list_active_bots_excludes_disabled(session, cipher) -> None:
     bot.status = BotStatus.DISABLED
     await session.flush()
     assert await list_active_bots(session) == []
+
+
+def other_bot(tg_bot_id: int) -> ManagedBotInfo:
+    return ManagedBotInfo(tg_bot_id=tg_bot_id, username=f"bot{tg_bot_id}", display_name="B")
+
+
+async def test_bot_over_plan_limit_is_suspended(session, cipher) -> None:
+    tg = FakeTelegram("x:token")
+    first = await register(session, cipher, tg, info=other_bot(1), max_bots=1)
+    second = await register(session, cipher, tg, info=other_bot(2), max_bots=1)
+
+    assert first.bot.status == BotStatus.ACTIVE and first.should_run
+    assert second.outcome == RegisterOutcome.CREATED
+    assert second.bot.status == BotStatus.SUSPENDED
+    assert not second.should_run
+    assert [b.tg_bot_id for b in await list_active_bots(session)] == [1]
+
+
+async def test_owner_change_does_not_count_the_bot_itself(session, cipher) -> None:
+    await register(session, cipher, FakeTelegram("555:aaa"))
+
+    result = await register(session, cipher, FakeTelegram("555:aaa"), creator=2002, max_bots=1)
+
+    assert result.outcome == RegisterOutcome.OWNER_CHANGED
+    assert result.bot.status == BotStatus.ACTIVE

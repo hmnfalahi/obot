@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,13 @@ class Settings(BaseSettings):
     max_output_tokens: int = 1024
     # Short-term memory: how many previous messages of a chat the agent sees
     history_limit: int = 20
+
+    plans_file: Path = Path("plans.yaml")
+
+    # Optional LLM tracing; enabled when both keys are set
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
 
     # Public HTTPS origin Telegram sends webhooks to, e.g. https://obot.example.com
     public_base_url: str | None = None

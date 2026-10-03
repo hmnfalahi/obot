@@ -7,12 +7,15 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from redis.asyncio import Redis
 
+from obot.billing.plans import Pricing
 from obot.bots.service import list_active_bots
 from obot.config import get_settings
 from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
 from obot.db.session import create_engine, create_sessionmaker
+from obot.observability import setup_tracing
 from obot.telegram import bots, factory
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.runtime import Runtime
@@ -28,7 +31,13 @@ async def main() -> None:
         env_names = ", ".join(f"OBOT_{name.upper()}" for name in missing)
         raise SystemExit(f"Set {env_names} in backend/.env")
 
+    pricing = Pricing.load(settings.plans_file)
+    pricing.require_models([settings.model_cheap, settings.model_strong])
+    setup_tracing(settings)
+
     engine = create_engine(settings.database_url)
+    redis = Redis.from_url(settings.redis_url)
+    factory_bot = Bot(settings.factory_bot_token.get_secret_value())
     runtime = Runtime(
         sessionmaker=create_sessionmaker(engine),
         cipher=TokenCipher.from_b64(settings.token_encryption_key.get_secret_value()),
@@ -39,6 +48,9 @@ async def main() -> None:
             settings.max_output_tokens,
         ),
         history_limit=settings.history_limit,
+        pricing=pricing,
+        redis=redis,
+        factory_bot=factory_bot,
     )
 
     runtime.bots_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
@@ -49,7 +61,6 @@ async def main() -> None:
     factory_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
     factory_dispatcher.include_router(factory.router)
 
-    factory_bot = Bot(settings.factory_bot_token.get_secret_value())
     me = await factory_bot.get_me()
     log.info("factory bot @%s", me.username)
 
@@ -65,6 +76,7 @@ async def main() -> None:
         await asyncio.Event().wait()
     finally:
         await runtime.polling.stop_all()
+        await redis.aclose()
         await engine.dispose()
 
 
