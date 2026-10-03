@@ -92,18 +92,19 @@ def build_tasks(
     return accepted, rejected
 
 
-async def count_live_tasks(session: AsyncSession, owner: User, exclude_bot: Bot) -> int:
-    """Live tasks of the owner's other bots (this bot's tasks are about to be replaced)."""
-    return await session.scalar(
+async def count_live_tasks(
+    session: AsyncSession, owner: User, exclude_bot: Bot | None = None
+) -> int:
+    """Live tasks of the owner, optionally without one bot whose tasks are being replaced."""
+    query = (
         select(func.count())
         .select_from(Task)
         .join(Bot, Bot.id == Task.bot_id)
-        .where(
-            Bot.owner_id == owner.id,
-            Task.bot_id != exclude_bot.id,
-            Task.status.in_(LIVE_STATUSES),
-        )
+        .where(Bot.owner_id == owner.id, Task.status.in_(LIVE_STATUSES))
     )
+    if exclude_bot is not None:
+        query = query.where(Task.bot_id != exclude_bot.id)
+    return await session.scalar(query)
 
 
 async def replace_bot_tasks(session: AsyncSession, bot: Bot, tasks: list[Task]) -> None:
@@ -185,3 +186,20 @@ async def record_run(
     session.add(run)
     await session.flush()
     return run
+
+
+async def set_paused(session: AsyncSession, task: Task, paused: bool, now: datetime) -> None:
+    if paused:
+        task.status = TaskStatus.PAUSED
+    else:
+        task.status = TaskStatus.ACTIVE
+        task.next_run_at = next_run(schedule_of(task), now)
+        if task.next_run_at is None:
+            task.status = TaskStatus.DONE
+    await session.flush()
+
+
+async def cancel_task(session: AsyncSession, task: Task) -> None:
+    task.status = TaskStatus.CANCELLED
+    task.next_run_at = None
+    await session.flush()

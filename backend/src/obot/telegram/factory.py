@@ -3,7 +3,6 @@
 import html
 import logging
 from datetime import UTC, datetime
-from urllib.parse import quote
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction, ChatType, ParseMode
@@ -42,6 +41,7 @@ from obot.factory.drafts import (
     take_awaiting_draft,
     update_draft,
 )
+from obot.factory.links import create_link
 from obot.i18n import lang_of, t
 from obot.notices import count_today
 from obot.tasks.apply import TaskSync, sync_tasks
@@ -131,11 +131,6 @@ async def _sync_and_report(
         return
     if requests or sync.rejected:
         await bot.send_message(chat_id, render_task_sync(lang, record, sync))
-
-
-def create_link(factory_username: str, suggested_username: str, name: str) -> str:
-    # Fallback for clients without request_managed_bot support (seen on iOS).
-    return f"https://t.me/newbot/{factory_username}/{suggested_username}?name={quote(name)}"
 
 
 # --- commands --------------------------------------------------------------------------
