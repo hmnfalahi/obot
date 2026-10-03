@@ -24,10 +24,35 @@ async def sync_tasks(
     session: AsyncSession, pricing: Pricing, model: Model, bot: Bot, requests: list[str]
 ) -> TaskSync:
     """Replace the bot's scheduled tasks with the ones described in `requests`."""
-    now = datetime.now(UTC)
     if not requests:
         await replace_bot_tasks(session, bot, [])
         return TaskSync()
+    already_live = await count_live_tasks(session, bot.owner, exclude_bot=bot)
+    sync = await _plan(session, pricing, model, bot, requests, already_live)
+    await replace_bot_tasks(session, bot, sync.scheduled)
+    return sync
+
+
+async def add_tasks(
+    session: AsyncSession, pricing: Pricing, model: Model, bot: Bot, requests: list[str]
+) -> TaskSync:
+    """Add tasks to the bot's existing ones (mini app)."""
+    already_live = await count_live_tasks(session, bot.owner)
+    sync = await _plan(session, pricing, model, bot, requests, already_live)
+    session.add_all(sync.scheduled)
+    await session.flush()
+    return sync
+
+
+async def _plan(
+    session: AsyncSession,
+    pricing: Pricing,
+    model: Model,
+    bot: Bot,
+    requests: list[str],
+    already_live: int,
+) -> TaskSync:
+    now = datetime.now(UTC)
     owner = bot.owner
     chats = [
         KnownChat(m.tg_chat_id, m.title, m.chat_type)
@@ -46,12 +71,6 @@ async def sync_tasks(
         kind=UsageKind.MEMORY,
     )
     tasks, rejected = build_tasks(
-        result.plan.tasks,
-        bot,
-        chats,
-        pricing.plan(owner.plan),
-        await count_live_tasks(session, owner, exclude_bot=bot),
-        now,
+        result.plan.tasks, bot, chats, pricing.plan(owner.plan), already_live, now
     )
-    await replace_bot_tasks(session, bot, tasks)
     return TaskSync(tasks, rejected)
