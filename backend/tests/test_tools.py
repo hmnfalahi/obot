@@ -7,7 +7,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from obot.core.agent import BotProfile, generate_reply
-from obot.core.fetch import FetchError, FetchResult, ensure_public_host, fetch
+from obot.core.fetch import FetchError, FetchResult, ensure_public_host, fetch, normalize_url
 from obot.core.tools import ToolServices, build_tools, page_text
 
 PAGE = b"""<html><body><nav>menu</nav><article><h1>Dollar price</h1>
@@ -179,3 +179,16 @@ async def test_web_search_formats_results() -> None:
 
     assert "Brent $100" in text
     assert meter.used == ["search"]
+
+
+def test_bare_hosts_get_https() -> None:
+    assert normalize_url("tgju.org/profile/x") == "https://tgju.org/profile/x"
+    assert normalize_url(" http://a.test/ ") == "http://a.test/"
+
+
+async def test_fetch_accepts_url_without_scheme(public_dns) -> None:
+    client = client_for({"https://site.test/page": httpx.Response(200, content=b"hi")})
+
+    result = await fetch(client, "site.test/page")
+
+    assert result.body == b"hi"
