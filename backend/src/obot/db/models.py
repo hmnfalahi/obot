@@ -310,3 +310,33 @@ class TaskRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime]
     finished_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class ReportStatus(enum.StrEnum):
+    OPEN = "open"
+    ACTIONED = "actioned"  # the bot was disabled
+    DISMISSED = "dismissed"
+
+
+class Report(Base):
+    """An abuse report about a bot, reviewed by service admins."""
+
+    __tablename__ = "reports"
+    __table_args__ = (Index("ix_reports_status", "status", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    reporter_tg_id: Mapped[int] = mapped_column(BigInteger)
+    tg_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[ReportStatus] = mapped_column(
+        Enum(
+            ReportStatus,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=ReportStatus.OPEN,
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    resolved_at: Mapped[datetime | None]
