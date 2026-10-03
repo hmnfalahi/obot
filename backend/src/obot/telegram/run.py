@@ -16,8 +16,11 @@ from obot.bots.service import list_active_bots
 from obot.config import get_settings
 from obot.core.fetch import make_client
 from obot.core.llm import ModelRegistry
+from obot.core.memory import Embedder
 from obot.crypto import TokenCipher
 from obot.db.session import create_engine, create_sessionmaker
+from obot.jobs import run_every
+from obot.memory.jobs import extract_pending, purge_history
 from obot.observability import setup_tracing
 from obot.telegram import bots, factory
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
@@ -49,21 +52,22 @@ async def main() -> None:
         raise SystemExit(f"Set {env_names} in backend/.env")
 
     pricing = Pricing.load(settings.plans_file)
-    pricing.require_models([settings.model_cheap, settings.model_strong])
+    pricing.require_models([settings.model_cheap, settings.model_strong, settings.embedding_model])
     setup_tracing(settings)
 
     engine = create_engine(settings.database_url)
+    models = ModelRegistry(
+        settings.openrouter_api_key.get_secret_value(),
+        {"cheap": settings.model_cheap, "strong": settings.model_strong},
+        settings.max_output_tokens,
+    )
     redis = Redis.from_url(settings.redis_url)
     factory_bot = Bot(settings.factory_bot_token.get_secret_value())
     runtime = Runtime(
         sessionmaker=create_sessionmaker(engine),
         cipher=TokenCipher.from_b64(settings.token_encryption_key.get_secret_value()),
         bots_dispatcher=Dispatcher(),
-        models=ModelRegistry(
-            settings.openrouter_api_key.get_secret_value(),
-            {"cheap": settings.model_cheap, "strong": settings.model_strong},
-            settings.max_output_tokens,
-        ),
+        models=models,
         history_limit=settings.history_limit,
         pricing=pricing,
         redis=redis,
@@ -71,6 +75,7 @@ async def main() -> None:
         factory_daily_messages=settings.factory_daily_messages,
         http=make_client(),
         sender=Sender(redis),
+        embedder=Embedder(models.client, settings.embedding_model),
         tavily_api_key=(
             settings.tavily_api_key.get_secret_value() if settings.tavily_api_key else None
         ),
@@ -95,9 +100,29 @@ async def main() -> None:
     log.info("launched %d managed bots", len(records))
 
     await runtime.polling.start(factory_bot, factory_dispatcher)
+    jobs = [
+        asyncio.create_task(
+            run_every(
+                "memory-extraction",
+                settings.memory_extract_interval_seconds,
+                lambda: extract_pending(
+                    runtime.sessionmaker, pricing, models.for_tier("cheap"), runtime.embedder
+                ),
+            )
+        ),
+        asyncio.create_task(
+            run_every(
+                "history-retention",
+                6 * 3600,
+                lambda: purge_history(runtime.sessionmaker, settings.message_retention_days),
+            )
+        ),
+    ]
     try:
         await asyncio.Event().wait()
     finally:
+        for job in jobs:
+            job.cancel()
         await runtime.polling.stop_all()
         await runtime.http.aclose()
         await redis.aclose()

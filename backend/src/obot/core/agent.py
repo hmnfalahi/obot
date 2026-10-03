@@ -58,15 +58,23 @@ GROUP_RULES = (
 
 
 def build_instructions(
-    profile: BotProfile, now: datetime | None = None, *, group: bool = False
+    profile: BotProfile,
+    now: datetime | None = None,
+    *,
+    group: bool = False,
+    memories: Sequence[str] = (),
 ) -> str:
     custom = (profile.persona.get("system_prompt") or "").strip() or DEFAULT_INSTRUCTIONS
     now = now or datetime.now(UTC)
     rules = f"{PLATFORM_RULES}\n\n{GROUP_RULES}" if group else PLATFORM_RULES
-    return (
+    text = (
         f"Your name is {profile.name}.\n\n{custom}\n\n{rules}\n\n"
         f"Current date and time: {now:%Y-%m-%d %H:%M} UTC."
     )
+    if memories:
+        facts = "\n".join(f"- {m}" for m in memories)
+        text += f"\n\nWhat you remember about this chat (may be outdated):\n{facts}"
+    return text
 
 
 def to_model_messages(history: Sequence[Turn]) -> list[ModelMessage]:
@@ -88,10 +96,11 @@ async def generate_reply(
     services: ToolServices | None = None,
     *,
     group: bool = False,
+    memories: Sequence[str] = (),
 ) -> Reply:
     agent = Agent(
         model,
-        instructions=build_instructions(profile, group=group),
+        instructions=build_instructions(profile, group=group, memories=memories),
         tools=tools,
         deps_type=ToolServices,
     )

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from obot.billing.plans import Pricing
 from obot.core.llm import ModelRegistry
+from obot.core.memory import Embedder
 from obot.crypto import TokenCipher
 from obot.telegram.polling import PollingManager
 from obot.telegram.sender import Sender
@@ -30,6 +31,7 @@ class Runtime:
     http: httpx.AsyncClient
     tavily_api_key: str | None
     sender: Sender
+    embedder: Embedder
     polling: PollingManager = field(default_factory=PollingManager)
 
     async def launch_bot(self, token: str) -> None:

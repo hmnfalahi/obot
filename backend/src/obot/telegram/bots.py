@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,8 @@ from obot.db.models import Bot as BotRecord
 from obot.db.models import Message as StoredMessage
 from obot.db.models import SenderKind
 from obot.i18n import lang_of, t
+from obot.memory.jobs import recall_facts
+from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
 from obot.telegram.addressing import is_addressed, strip_mention
 from obot.telegram.runtime import Runtime
@@ -51,6 +53,30 @@ async def on_start(
         "All set — I can message you now." if first_time else f"Hi! I'm {bot_record.display_name}."
     )
     await runtime.sender.send_text(message.bot, message.chat.id, text, group=False)
+
+
+@router.message(Command("forget"))
+async def on_forget(
+    message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
+) -> None:
+    lang = lang_of(message.from_user.language_code)
+    group = message.chat.type in GROUP_TYPES
+    if group:
+        member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
+        if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+            await runtime.sender.send_text(
+                message.bot,
+                message.chat.id,
+                t(lang, "forget.admins_only"),
+                group=True,
+                reply_to=message.message_id,
+            )
+            return
+    await forget_chat(session, ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id))
+    await session.commit()
+    await runtime.sender.send_text(
+        message.bot, message.chat.id, t(lang, "forget.done"), group=group
+    )
 
 
 @router.my_chat_member()
@@ -147,10 +173,15 @@ async def _respond(
     ]
     user_text = f"{message.from_user.full_name}: {text}" if group else text
     profile = BotProfile(name=bot_record.display_name, persona=bot_record.persona)
+    memories: list[str] = []
     reply_to = message.message_id if group else None
 
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     try:
+        if MEMORY_TOOL in (bot_record.tools or []):
+            memories = await recall_facts(
+                session, runtime.pricing, bot_record, scope, text, runtime.embedder
+            )
         tier = allowed_tier(runtime.pricing, owner, bot_record.model_tier)
         services = ToolServices(
             http=runtime.http,
@@ -165,6 +196,7 @@ async def _respond(
             tools=build_tools(bot_record.tools or []),
             services=services,
             group=group,
+            memories=memories,
         )
     except Exception:
         log.exception("agent failed for bot %s chat %s", bot_record.id, message.chat.id)

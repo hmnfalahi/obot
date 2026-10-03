@@ -84,11 +84,13 @@ async def record_llm_usage(
     model: str,
     tokens_in: int,
     tokens_out: int,
+    kind: UsageKind = UsageKind.LLM,
 ) -> UsageEvent:
+    """Record a model call; MEMORY calls cost credits but do not count as messages."""
     event = UsageEvent(
         owner_id=owner.id,
         bot_id=bot.id,
-        kind=UsageKind.LLM,
+        kind=kind,
         model=model,
         tokens_in=tokens_in,
         tokens_out=tokens_out,

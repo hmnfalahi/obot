@@ -11,11 +11,13 @@ models:
   google/gemini-2.5-flash-lite: {input_per_mtok: 0.10, output_per_mtok: 0.40}
   anthropic/claude-haiku-4.5: {input_per_mtok: 1.0, output_per_mtok: 5.0}
   anthropic/claude-sonnet-5.5: {input_per_mtok: 2.0, output_per_mtok: 10.0}
+  baai/bge-m3: {input_per_mtok: 0.01, output_per_mtok: 0}   # embeddings
 
 # Provider prices per tool call in USD.
 tools:
   search: 0.008   # Tavily basic search (1 API credit)
   fetch: 0        # our own bandwidth; recorded for statistics
+  memory: 0       # priced per model call via `models`
 
 plans:
   free:
