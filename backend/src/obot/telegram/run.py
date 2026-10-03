@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 
 from obot.bots.service import list_active_bots
 from obot.config import get_settings
+from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
 from obot.db.session import create_engine, create_sessionmaker
 from obot.telegram import bots, factory
@@ -22,14 +23,22 @@ log = logging.getLogger(__name__)
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = get_settings()
-    if settings.factory_bot_token is None or settings.token_encryption_key is None:
-        raise SystemExit("Set OBOT_FACTORY_BOT_TOKEN and OBOT_TOKEN_ENCRYPTION_KEY in backend/.env")
+    required = ("factory_bot_token", "token_encryption_key", "openrouter_api_key")
+    if missing := [name for name in required if getattr(settings, name) is None]:
+        env_names = ", ".join(f"OBOT_{name.upper()}" for name in missing)
+        raise SystemExit(f"Set {env_names} in backend/.env")
 
     engine = create_engine(settings.database_url)
     runtime = Runtime(
         sessionmaker=create_sessionmaker(engine),
         cipher=TokenCipher.from_b64(settings.token_encryption_key.get_secret_value()),
         bots_dispatcher=Dispatcher(),
+        models=ModelRegistry(
+            settings.openrouter_api_key.get_secret_value(),
+            {"cheap": settings.model_cheap, "strong": settings.model_strong},
+            settings.max_output_tokens,
+        ),
+        history_limit=settings.history_limit,
     )
 
     runtime.bots_dispatcher.update.outer_middleware(SessionMiddleware(runtime))

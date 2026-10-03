@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     factory_bot_token: SecretStr | None = None
     # base64url-encoded 32-byte key for encrypting bot tokens at rest
     token_encryption_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
+    # OpenRouter model ids per tier; see https://openrouter.ai/models
+    model_cheap: str = "google/gemini-3.1-flash-lite"
+    model_strong: str = "anthropic/claude-sonnet-5.5"
+    max_output_tokens: int = 1024
+    # Short-term memory: how many previous messages of a chat the agent sees
+    history_limit: int = 20
+
     # Public HTTPS origin Telegram sends webhooks to, e.g. https://obot.example.com
     public_base_url: str | None = None
 
