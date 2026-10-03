@@ -1,0 +1,33 @@
+# Plan limits and model pricing. Read at startup; change values without code changes.
+
+# 1 credit = this many USD of the *billed* price (provider cost x markup).
+usd_per_credit: 0.0001
+markup: 2.5
+
+# Provider prices in USD per million tokens (OpenRouter). Every model used in
+# OBOT_MODEL_* settings must be listed here.
+models:
+  google/gemini-3.1-flash-lite: {input_per_mtok: 0.25, output_per_mtok: 1.5}
+  google/gemini-2.5-flash-lite: {input_per_mtok: 0.10, output_per_mtok: 0.40}
+  anthropic/claude-haiku-4.5: {input_per_mtok: 1.0, output_per_mtok: 5.0}
+  anthropic/claude-sonnet-5.5: {input_per_mtok: 2.0, output_per_mtok: 10.0}
+
+plans:
+  free:
+    max_bots: 2
+    daily_llm_messages: 30   # across all of the owner's bots
+    model_tiers: [cheap]
+    uses_credits: false      # credits are computed but not deducted
+    max_scheduled_tasks: 3
+    min_task_interval_minutes: 60
+    daily_web_searches: 10
+    knowledge_bytes: 1048576
+  paid:
+    max_bots: 20
+    daily_llm_messages: null # limited by credit balance only
+    model_tiers: [cheap, strong]
+    uses_credits: true
+    max_scheduled_tasks: 50
+    min_task_interval_minutes: 5
+    daily_web_searches: 200
+    knowledge_bytes: 52428800

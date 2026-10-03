@@ -1,5 +1,6 @@
 import enum
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Index,
     LargeBinary,
     MetaData,
+    Numeric,
     String,
     Text,
     func,
@@ -33,6 +35,9 @@ class Base(DeclarativeBase):
 
 class BotStatus(enum.StrEnum):
     ACTIVE = "active"
+    # Not served because the owner's plan does not allow it (e.g. too many bots).
+    SUSPENDED = "suspended"
+    # Turned off by a service admin (kill switch).
     DISABLED = "disabled"
 
 
@@ -110,4 +115,36 @@ class Message(Base):
     sender_tg_id: Mapped[int | None] = mapped_column(BigInteger)
     sender_name: Mapped[str | None] = mapped_column(String(256))
     text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class UsageKind(enum.StrEnum):
+    LLM = "llm"
+    SEARCH = "search"
+    FETCH = "fetch"
+
+
+class UsageEvent(Base):
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        Index("ix_usage_events_owner_created", "owner_id", "created_at"),
+        Index("ix_usage_events_bot_created", "bot_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    kind: Mapped[UsageKind] = mapped_column(
+        Enum(
+            UsageKind,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
+    model: Mapped[str | None] = mapped_column(String(128))
+    tokens_in: Mapped[int] = mapped_column(BigInteger, default=0)
+    tokens_out: Mapped[int] = mapped_column(BigInteger, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8))
+    credits: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

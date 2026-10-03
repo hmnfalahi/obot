@@ -8,7 +8,7 @@ async def make_bot(session, cipher, tg_bot_id: int) -> int:
         return f"{tg_bot_id}:token"
 
     result = await register_managed_bot(
-        session, cipher, fetch_token, 1001, ManagedBotInfo(tg_bot_id, f"b{tg_bot_id}", "B")
+        session, cipher, fetch_token, 1001, ManagedBotInfo(tg_bot_id, f"b{tg_bot_id}", "B"), 10
     )
     return result.bot.id
 

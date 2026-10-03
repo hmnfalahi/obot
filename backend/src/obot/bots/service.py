@@ -3,7 +3,7 @@ import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -33,7 +33,11 @@ class ManagedBotInfo:
 class RegisterResult:
     bot: Bot
     outcome: RegisterOutcome
-    token: str | None  # plaintext, only when the bot should (re)start
+    token: str | None  # plaintext; None when the update was ignored
+
+    @property
+    def should_run(self) -> bool:
+        return self.token is not None and self.bot.status == BotStatus.ACTIVE
 
 
 async def get_or_create_user(
@@ -53,12 +57,14 @@ async def register_managed_bot(
     fetch_token: TokenFetcher,
     creator_tg_id: int,
     info: ManagedBotInfo,
+    max_bots: int,
 ) -> RegisterResult:
     """Handle a `managed_bot` update: creation, token replacement or owner change.
 
     Telegram sends the same update for all three, including after our own
     replaceManagedBotToken (kill switch), so this must be idempotent and must
-    never revive a disabled bot.
+    never revive a disabled bot. A bot that would exceed the owner's `max_bots`
+    is stored as suspended.
     """
     bot = await session.scalar(
         select(Bot).options(joinedload(Bot.owner)).where(Bot.tg_bot_id == info.tg_bot_id)
@@ -79,6 +85,7 @@ async def register_managed_bot(
             display_name=info.display_name,
             token_encrypted=cipher.encrypt(token, context),
             webhook_secret=secrets.token_urlsafe(32),
+            status=await _status_within_limit(session, owner, max_bots),
         )
         session.add(bot)
         await session.flush()
@@ -88,6 +95,8 @@ async def register_managed_bot(
     bot.display_name = info.display_name
 
     if bot.owner_id != owner.id:
+        # Count before reassigning: autoflush would otherwise count this bot too.
+        bot.status = await _status_within_limit(session, owner, max_bots)
         bot.owner = owner
         bot.owner_started = False
         bot.token_encrypted = cipher.encrypt(token, context)
@@ -100,6 +109,18 @@ async def register_managed_bot(
 
     await session.flush()
     return RegisterResult(bot, outcome, token)
+
+
+async def count_active_bots(session: AsyncSession, owner: User) -> int:
+    return await session.scalar(
+        select(func.count()).where(Bot.owner_id == owner.id, Bot.status == BotStatus.ACTIVE)
+    )
+
+
+async def _status_within_limit(session: AsyncSession, owner: User, max_bots: int) -> BotStatus:
+    if await count_active_bots(session, owner) >= max_bots:
+        return BotStatus.SUSPENDED
+    return BotStatus.ACTIVE
 
 
 async def get_bot_by_tg_id(session: AsyncSession, tg_bot_id: int) -> Bot | None:

@@ -22,9 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.bots.service import (
     ManagedBotInfo,
     RegisterOutcome,
+    count_active_bots,
     get_or_create_user,
     register_managed_bot,
 )
+from obot.db.models import BotStatus
+from obot.i18n import lang_of, t
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -62,9 +65,13 @@ def create_bot_link(factory_username: str, suggested_username: str) -> str:
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, bot: Bot, session: AsyncSession) -> None:
+async def on_start(message: Message, bot: Bot, session: AsyncSession, runtime: Runtime) -> None:
     user = message.from_user
-    await get_or_create_user(session, user.id, user.language_code)
+    owner = await get_or_create_user(session, user.id, user.language_code)
+    limit = runtime.pricing.plan(owner.plan).max_bots
+    if await count_active_bots(session, owner) >= limit:
+        await message.answer(t(lang_of(user.language_code), "factory.at_limit", limit=limit))
+        return
     username = suggest_username()
     await message.answer(
         "Hi! I build AI bots for you. Tap the button to create one.",
@@ -92,6 +99,8 @@ async def on_managed_bot(
     async def fetch_token(tg_bot_id: int) -> str:
         return await bot(GetManagedBotToken(user_id=tg_bot_id))
 
+    owner = await get_or_create_user(session, update.user.id, update.user.language_code)
+
     result = await register_managed_bot(
         session,
         runtime.cipher,
@@ -102,15 +111,22 @@ async def on_managed_bot(
             username=update.bot_user.username,
             display_name=update.bot_user.first_name,
         ),
+        max_bots=runtime.pricing.plan(owner.plan).max_bots,
     )
     log.info("managed bot @%s: %s", update.bot_user.username, result.outcome)
 
-    if result.outcome == RegisterOutcome.IGNORED_DISABLED:
+    if not result.should_run:
         await runtime.stop_bot(update.bot_user.id)
     elif result.outcome != RegisterOutcome.UNCHANGED or not runtime.polling.is_running(
         update.bot_user.id
     ):
         await runtime.launch_bot(result.token)
+
+    if result.outcome == RegisterOutcome.CREATED and result.bot.status == BotStatus.SUSPENDED:
+        limit = runtime.pricing.plan(owner.plan).max_bots
+        await bot.send_message(
+            update.user.id, t(lang_of(update.user.language_code), "factory.bot_limit", limit=limit)
+        )
 
 
 @router.message(F.managed_bot_created)
