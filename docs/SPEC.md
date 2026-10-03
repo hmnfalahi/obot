@@ -158,10 +158,11 @@ Obot یک **کارخانه‌ی ربات هوش مصنوعی روی تلگرام
 
 ```
 obot/
+├─ compose.yaml       # زیرساخت توسعه‌ی محلی (Postgres، Redis)
 ├─ backend/
 │  ├─ pyproject.toml
 │  ├─ alembic/
-│  └─ obot/
+│  └─ src/obot/
 │     ├─ api/          # FastAPI: /tg/* و /api/*
 │     ├─ worker/       # تسک‌های Taskiq
 │     ├─ core/         # موتور ایجنت، مستقل از تلگرام
