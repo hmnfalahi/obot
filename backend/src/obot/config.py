@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     max_output_tokens: int = 1024
     # Short-term memory: how many previous messages of a chat the agent sees
     history_limit: int = 20
+    # Long-term memory
+    embedding_model: str = "baai/bge-m3"
+    memory_extract_interval_seconds: int = 300
+    message_retention_days: int = 30
 
     plans_file: Path = Path("plans.yaml")
     # Designer (LLM) messages a user may send to the factory bot per day

@@ -3,6 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     DateTime,
@@ -123,6 +124,8 @@ class UsageKind(enum.StrEnum):
     LLM = "llm"
     SEARCH = "search"
     FETCH = "fetch"
+    # Background memory extraction and embeddings; not counted as messages.
+    MEMORY = "memory"
 
 
 class UsageEvent(Base):
@@ -215,3 +218,30 @@ class BotChat(Base):
     joined_at: Mapped[datetime] = mapped_column(server_default=func.now())
     left_at: Mapped[datetime | None]
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+EMBEDDING_DIMENSIONS = 1024
+
+
+class ChatMemory(Base):
+    """A durable fact a bot learned in one chat. Always accessed through obot.memory.store."""
+
+    __tablename__ = "chat_memories"
+    __table_args__ = (Index("ix_chat_memories_scope", "bot_id", "tg_chat_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    tg_chat_id: Mapped[int] = mapped_column(BigInteger)
+    fact: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class MemoryCursor(Base):
+    """Last message of a chat already processed by memory extraction."""
+
+    __tablename__ = "memory_cursors"
+
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), primary_key=True)
+    tg_chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    last_message_id: Mapped[int] = mapped_column(BigInteger)

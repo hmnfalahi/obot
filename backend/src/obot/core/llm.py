@@ -27,6 +27,7 @@ class ModelRegistry:
             max_retries=MAX_RETRIES,
             default_headers={"X-Title": "Obot"},
         )
+        self.client = client
         self._provider = OpenRouterProvider(openai_client=client)
         self._names = models_by_tier
         # Without max_tokens OpenRouter reserves the model's full output window

@@ -50,6 +50,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.read_url": "read web pages",
         "tool.rss": "RSS feeds",
         "tool.memory": "memory",
+        "forget.done": "Done — I forgot everything about this chat.",
+        "forget.admins_only": "Only group admins can do that.",
     },
     "fa": {
         "quota.daily_messages": "سهمیه‌ی پیام امروزم تموم شده. فردا برمی‌گردم!",
@@ -99,6 +101,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.read_url": "خواندن صفحه‌ی وب",
         "tool.rss": "خبرخوان RSS",
         "tool.memory": "حافظه",
+        "forget.done": "انجام شد — هر چی درباره‌ی این چت می‌دونستم پاک شد.",
+        "forget.admins_only": "فقط ادمین‌های گروه می‌تونن این کار رو بکنن.",
     },
 }
 
