@@ -1,33 +1,23 @@
-"""Long-polling transport for many bots in one process (development).
-
-Every update goes through `Dispatcher.feed_update`, the same entry point a
-webhook handler uses, so switching to webhooks only replaces this module.
-Updates of different chats are handled concurrently, those of one chat in order.
-"""
+"""Long-polling transport for many bots in one process (development)."""
 
 import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
-from aiogram.types import Update
 
-from obot.telegram.concurrency import KeyedLock, ordering_key
+from obot.telegram.updates import UpdateQueue
 
 log = logging.getLogger(__name__)
 
 POLL_TIMEOUT = 30
 MAX_BACKOFF = 30
-# Upper bound of updates handled at the same time across all bots.
-MAX_CONCURRENT_UPDATES = 64
 
 
 class PollingManager:
-    def __init__(self) -> None:
+    def __init__(self, updates: UpdateQueue) -> None:
+        self._updates = updates
         self._tasks: dict[int, asyncio.Task[None]] = {}
-        self._handlers: set[asyncio.Task[None]] = set()
-        self._order = KeyedLock()
-        self._slots = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
 
     def is_running(self, tg_bot_id: int) -> bool:
         return tg_bot_id in self._tasks
@@ -76,20 +66,6 @@ class PollingManager:
                 backoff = 1
                 for update in updates:
                     offset = update.update_id + 1
-                    # Tasks start in creation order and queue on their chat's FIFO lock
-                    # before their first await, so one chat's updates keep their order.
-                    await self._slots.acquire()
-                    task = asyncio.create_task(self._handle(bot, dispatcher, update))
-                    self._handlers.add(task)
-                    task.add_done_callback(self._handlers.discard)
+                    await self._updates.submit(bot, dispatcher, update)
         finally:
             await bot.session.close()
-
-    async def _handle(self, bot: Bot, dispatcher: Dispatcher, update: Update) -> None:
-        try:
-            async with self._order.hold((bot.id, ordering_key(update))):
-                await dispatcher.feed_update(bot, update)
-        except Exception:
-            log.exception("failed to handle update %s of bot %s", update.update_id, bot.id)
-        finally:
-            self._slots.release()

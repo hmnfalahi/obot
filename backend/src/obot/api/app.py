@@ -36,9 +36,11 @@ async def state_from_settings() -> tuple[ApiState, list]:
     return state, [engine.dispose]
 
 
-def create_app(state: ApiState | None = None) -> FastAPI:
+def create_app(state: ApiState | None = None, lifespan=None) -> FastAPI:
+    """The API alone (development), or inside obot.server with that process's lifespan."""
+
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def api_only(app: FastAPI) -> AsyncIterator[None]:
         cleanups = []
         if state is None:
             app.state.api, cleanups = await state_from_settings()
@@ -48,7 +50,7 @@ def create_app(state: ApiState | None = None) -> FastAPI:
         for cleanup in cleanups:
             await cleanup()
 
-    app = FastAPI(title="Obot", lifespan=lifespan)
+    app = FastAPI(title="Obot", lifespan=lifespan or api_only)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

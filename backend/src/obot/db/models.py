@@ -68,7 +68,6 @@ class Bot(Base):
     display_name: Mapped[str] = mapped_column(String(128))
     # AES-GCM, bound to tg_bot_id; see obot.crypto
     token_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
-    webhook_secret: Mapped[str] = mapped_column(String(128))
     persona: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     model_tier: Mapped[str] = mapped_column(String(32), default="cheap")
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)

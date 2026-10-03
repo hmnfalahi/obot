@@ -411,7 +411,7 @@ async def on_managed_bot(
 
     if not result.should_run:
         await runtime.stop_bot(update.bot_user.id)
-    elif result.outcome != RegisterOutcome.UNCHANGED or not runtime.polling.is_running(
+    elif result.outcome != RegisterOutcome.UNCHANGED or not runtime.transport.is_running(
         update.bot_user.id
     ):
         await runtime.launch_bot(result.token)
