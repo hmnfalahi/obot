@@ -9,6 +9,7 @@ from obot.billing.plans import Pricing
 from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
 from obot.telegram.polling import PollingManager
+from obot.telegram.sender import Sender
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Runtime:
     # Shared client for tools (web search, page fetches)
     http: httpx.AsyncClient
     tavily_api_key: str | None
+    sender: Sender
     polling: PollingManager = field(default_factory=PollingManager)
 
     async def launch_bot(self, token: str) -> None:

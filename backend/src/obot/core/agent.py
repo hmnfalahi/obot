@@ -50,11 +50,21 @@ class Reply:
     output_tokens: int
 
 
-def build_instructions(profile: BotProfile, now: datetime | None = None) -> str:
+GROUP_RULES = (
+    "You are in a Telegram group. Each user message starts with the sender's name "
+    "('Name: text'). Answer the latest message that is addressed to you; do not "
+    "prefix your reply with your own name."
+)
+
+
+def build_instructions(
+    profile: BotProfile, now: datetime | None = None, *, group: bool = False
+) -> str:
     custom = (profile.persona.get("system_prompt") or "").strip() or DEFAULT_INSTRUCTIONS
     now = now or datetime.now(UTC)
+    rules = f"{PLATFORM_RULES}\n\n{GROUP_RULES}" if group else PLATFORM_RULES
     return (
-        f"Your name is {profile.name}.\n\n{custom}\n\n{PLATFORM_RULES}\n\n"
+        f"Your name is {profile.name}.\n\n{custom}\n\n{rules}\n\n"
         f"Current date and time: {now:%Y-%m-%d %H:%M} UTC."
     )
 
@@ -76,9 +86,14 @@ async def generate_reply(
     user_text: str,
     tools: Sequence[Tool[ToolServices]] = (),
     services: ToolServices | None = None,
+    *,
+    group: bool = False,
 ) -> Reply:
     agent = Agent(
-        model, instructions=build_instructions(profile), tools=tools, deps_type=ToolServices
+        model,
+        instructions=build_instructions(profile, group=group),
+        tools=tools,
+        deps_type=ToolServices,
     )
     result = await agent.run(
         user_text,

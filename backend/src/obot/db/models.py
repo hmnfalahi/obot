@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -195,4 +196,22 @@ class FactoryDraft(Base):
     # Designer's last message, so answers to its questions keep their context.
     last_reply: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class BotChat(Base):
+    """Groups and channels a bot is (or was) a member of."""
+
+    __tablename__ = "bot_chats"
+    __table_args__ = (UniqueConstraint("bot_id", "tg_chat_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    tg_chat_id: Mapped[int] = mapped_column(BigInteger)
+    chat_type: Mapped[str] = mapped_column(String(16))
+    title: Mapped[str | None] = mapped_column(String(256))
+    is_member: Mapped[bool] = mapped_column(default=True)
+    is_admin: Mapped[bool] = mapped_column(default=False)
+    joined_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    left_at: Mapped[datetime | None]
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

@@ -33,6 +33,8 @@ def ordering_key(update: Update) -> Hashable:
     """Updates with the same key are handled in order; different keys run concurrently."""
     if update.message:
         return ("chat", update.message.chat.id)
+    if update.my_chat_member:
+        return ("chat", update.my_chat_member.chat.id)
     if update.callback_query:
         return ("user", update.callback_query.from_user.id)
     if update.managed_bot:
