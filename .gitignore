@@ -17,3 +17,4 @@ dist/
 # misc
 .DS_Store
 *.pem
+.spike_bots.json
