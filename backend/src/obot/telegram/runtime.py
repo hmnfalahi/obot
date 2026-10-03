@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from aiogram import Bot, Dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
 from obot.telegram.polling import PollingManager
 
@@ -14,6 +15,8 @@ class Runtime:
     sessionmaker: async_sessionmaker[AsyncSession]
     cipher: TokenCipher
     bots_dispatcher: Dispatcher
+    models: ModelRegistry
+    history_limit: int
     polling: PollingManager = field(default_factory=PollingManager)
 
     async def launch_bot(self, token: str) -> None:

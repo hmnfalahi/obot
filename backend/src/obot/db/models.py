@@ -7,9 +7,11 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     LargeBinary,
     MetaData,
     String,
+    Text,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -79,3 +81,33 @@ class Bot(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     owner: Mapped[User] = relationship(back_populates="bots")
+
+
+class SenderKind(enum.StrEnum):
+    HUMAN = "human"
+    BOT = "bot"  # another bot in the chat
+    SELF = "self"  # this bot's own reply
+
+
+class Message(Base):
+    """Raw chat history, kept for 30 days. Always accessed through obot.chat.history."""
+
+    __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_scope_created", "bot_id", "tg_chat_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    tg_chat_id: Mapped[int] = mapped_column(BigInteger)
+    tg_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    sender_kind: Mapped[SenderKind] = mapped_column(
+        Enum(
+            SenderKind,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
+    sender_tg_id: Mapped[int | None] = mapped_column(BigInteger)
+    sender_name: Mapped[str | None] = mapped_column(String(256))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
