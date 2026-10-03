@@ -2,7 +2,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Text
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from obot.core.agent import BotProfile, Turn, build_instructions, generate_reply
-from obot.telegram.bots import split_text
+from obot.telegram.sender import split_text
 
 
 def test_instructions_use_persona_or_default() -> None:

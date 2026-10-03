@@ -22,6 +22,7 @@ from obot.observability import setup_tracing
 from obot.telegram import bots, factory
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.runtime import Runtime
+from obot.telegram.sender import Sender
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ async def main() -> None:
         factory_bot=factory_bot,
         factory_daily_messages=settings.factory_daily_messages,
         http=make_client(),
+        sender=Sender(redis),
         tavily_api_key=(
             settings.tavily_api_key.get_secret_value() if settings.tavily_api_key else None
         ),
