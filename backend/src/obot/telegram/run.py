@@ -22,7 +22,7 @@ from obot.db.session import create_engine, create_sessionmaker
 from obot.jobs import run_every
 from obot.memory.jobs import extract_pending, purge_history
 from obot.observability import setup_tracing
-from obot.telegram import bots, factory
+from obot.telegram import bots, factory, moderation
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.runtime import Runtime
 from obot.telegram.sender import Sender
@@ -92,6 +92,7 @@ async def main() -> None:
         sender=Sender(redis),
         embedder=Embedder(models.client, settings.embedding_model),
         miniapp_url=settings.miniapp_url,
+        admins=settings.admins,
         tavily_api_key=(
             settings.tavily_api_key.get_secret_value() if settings.tavily_api_key else None
         ),
@@ -103,6 +104,8 @@ async def main() -> None:
 
     factory_dispatcher = Dispatcher()
     factory_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
+    # Moderation first: /report and admin commands must not reach the designer.
+    factory_dispatcher.include_router(moderation.router)
     factory_dispatcher.include_router(factory.router)
 
     me = await get_me_with_retry(factory_bot)

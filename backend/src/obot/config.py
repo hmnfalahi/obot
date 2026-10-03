@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # Telegram user ids of service admins (comma-separated): kill switch and reports
+    admin_tg_ids: str = ""
+
+    @property
+    def admins(self) -> frozenset[int]:
+        return frozenset(int(x) for x in self.admin_tg_ids.replace(" ", "").split(",") if x)
+
     # Public HTTPS URL of the mini app (in development: the cloudflared tunnel)
     miniapp_url: str | None = None
 

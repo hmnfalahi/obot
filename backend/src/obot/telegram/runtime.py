@@ -33,6 +33,9 @@ class Runtime:
     sender: Sender
     embedder: Embedder
     miniapp_url: str | None = None
+    admins: frozenset[int] = frozenset()
+    # Abuse reports one person may send per day
+    daily_reports: int = 5
 
     def panel_url(self, bot_id: int | None = None) -> str | None:
         if not self.miniapp_url:

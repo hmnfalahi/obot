@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
 from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
+from obot.telegram.moderation import report_from_bot
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,17 @@ async def on_start(
         "All set — I can message you now." if first_time else f"Hi! I'm {bot_record.display_name}."
     )
     await runtime.sender.send_text(message.bot, message.chat.id, text, group=False)
+
+
+@router.message(Command("report"))
+async def on_report(
+    message: Message,
+    command: CommandObject,
+    session: AsyncSession,
+    bot_record: BotRecord,
+    runtime: Runtime,
+) -> None:
+    await report_from_bot(message, session, runtime, bot_record, command.args)
 
 
 @router.message(Command("forget"))
