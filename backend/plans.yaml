@@ -12,6 +12,11 @@ models:
   anthropic/claude-haiku-4.5: {input_per_mtok: 1.0, output_per_mtok: 5.0}
   anthropic/claude-sonnet-5.5: {input_per_mtok: 2.0, output_per_mtok: 10.0}
 
+# Provider prices per tool call in USD.
+tools:
+  search: 0.008   # Tavily basic search (1 API credit)
+  fetch: 0        # our own bandwidth; recorded for statistics
+
 plans:
   free:
     max_bots: 2

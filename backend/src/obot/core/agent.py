@@ -2,9 +2,10 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, Tool, UsageLimits
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -14,12 +15,19 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 
+from obot.core.tools import ToolServices
+
 DEFAULT_INSTRUCTIONS = "You are a helpful, friendly assistant."
 
 PLATFORM_RULES = (
     "You are chatting on Telegram. Reply in the language of the user's latest message. "
-    "Keep replies concise. Use plain text only: no Markdown, no tables."
+    "Keep replies concise. Use plain text only: no Markdown, no tables. "
+    "Use your tools when the answer needs current or external information. "
+    "If a tool returns an ERROR, tell the user plainly what failed; never invent data."
 )
+
+# Model requests per reply, including tool round-trips; bounds cost of tool loops.
+REQUEST_LIMIT = 6
 
 
 @dataclass(frozen=True)
@@ -42,9 +50,13 @@ class Reply:
     output_tokens: int
 
 
-def build_instructions(profile: BotProfile) -> str:
+def build_instructions(profile: BotProfile, now: datetime | None = None) -> str:
     custom = (profile.persona.get("system_prompt") or "").strip() or DEFAULT_INSTRUCTIONS
-    return f"Your name is {profile.name}.\n\n{custom}\n\n{PLATFORM_RULES}"
+    now = now or datetime.now(UTC)
+    return (
+        f"Your name is {profile.name}.\n\n{custom}\n\n{PLATFORM_RULES}\n\n"
+        f"Current date and time: {now:%Y-%m-%d %H:%M} UTC."
+    )
 
 
 def to_model_messages(history: Sequence[Turn]) -> list[ModelMessage]:
@@ -58,10 +70,22 @@ def to_model_messages(history: Sequence[Turn]) -> list[ModelMessage]:
 
 
 async def generate_reply(
-    model: Model, profile: BotProfile, history: Sequence[Turn], user_text: str
+    model: Model,
+    profile: BotProfile,
+    history: Sequence[Turn],
+    user_text: str,
+    tools: Sequence[Tool[ToolServices]] = (),
+    services: ToolServices | None = None,
 ) -> Reply:
-    agent = Agent(model, instructions=build_instructions(profile))
-    result = await agent.run(user_text, message_history=to_model_messages(history))
+    agent = Agent(
+        model, instructions=build_instructions(profile), tools=tools, deps_type=ToolServices
+    )
+    result = await agent.run(
+        user_text,
+        message_history=to_model_messages(history),
+        deps=services,
+        usage_limits=UsageLimits(request_limit=REQUEST_LIMIT),
+    )
     usage = result.usage
     return Reply(
         text=result.output,

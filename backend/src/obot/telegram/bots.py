@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import (
     QuotaReason,
+    UsageMeter,
     allowed_tier,
     check_llm_quota,
     record_llm_usage,
@@ -18,6 +19,7 @@ from obot.billing.usage import (
 from obot.bots.service import mark_owner_started
 from obot.chat.history import ChatScope, recent_messages, record_message
 from obot.core.agent import BotProfile, Turn, generate_reply
+from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot as BotRecord
 from obot.db.models import SenderKind
 from obot.i18n import lang_of, t
@@ -88,7 +90,19 @@ async def on_private_text(
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     try:
         tier = allowed_tier(runtime.pricing, owner, bot_record.model_tier)
-        reply = await generate_reply(runtime.models.for_tier(tier), profile, history, message.text)
+        services = ToolServices(
+            http=runtime.http,
+            meter=UsageMeter(session, runtime.pricing, owner, bot_record, now),
+            tavily_api_key=runtime.tavily_api_key,
+        )
+        reply = await generate_reply(
+            runtime.models.for_tier(tier),
+            profile,
+            history,
+            message.text,
+            tools=build_tools(bot_record.tools or []),
+            services=services,
+        )
     except Exception:
         log.exception("agent failed for bot %s chat %s", bot_record.id, message.chat.id)
         await message.answer("Sorry, something went wrong. Please try again.")

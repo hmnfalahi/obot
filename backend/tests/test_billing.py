@@ -7,12 +7,15 @@ import pytest
 from obot.billing.plans import Pricing
 from obot.billing.usage import (
     QuotaReason,
+    UsageMeter,
     allowed_tier,
     check_llm_quota,
     record_llm_usage,
+    record_tool_usage,
     start_of_day,
 )
 from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.db.models import UsageKind
 
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
 MODEL = "google/gemini-3.1-flash-lite"
@@ -128,3 +131,30 @@ async def test_allowed_tier_falls_back_to_plan_tier(session, cipher, pricing) ->
     assert allowed_tier(pricing, owner, "strong") == "cheap"
     owner.plan = "paid"
     assert allowed_tier(pricing, owner, "strong") == "strong"
+
+
+async def test_free_plan_daily_search_limit(session, cipher, pricing) -> None:
+    pricing.plans["free"].daily_web_searches = 1
+    bot = await make_bot(session, cipher)
+    meter = UsageMeter(session, pricing, bot.owner, bot, datetime.now(UTC))
+
+    assert await meter.before("search") is None
+    await meter.after("search")
+
+    assert "search limit" in await meter.before("search")
+    assert await meter.before("fetch") is None
+
+
+async def test_search_costs_credits_fetch_is_free(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    owner = bot.owner
+    owner.plan = "paid"
+    owner.credit_balance = 1000
+
+    search = await record_tool_usage(session, pricing, owner, bot, UsageKind.SEARCH)
+    fetched = await record_tool_usage(session, pricing, owner, bot, UsageKind.FETCH)
+
+    # 0.008 USD * 2.5 markup / 0.0001 per credit
+    assert search.credits == 200
+    assert fetched.credits == 0
+    assert owner.credit_balance == 800

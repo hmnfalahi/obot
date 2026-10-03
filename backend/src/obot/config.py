@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     # base64url-encoded 32-byte key for encrypting bot tokens at rest
     token_encryption_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
+    # Web search for bots with the web_search tool; disabled when unset
+    tavily_api_key: SecretStr | None = None
     # OpenRouter model ids per tier; see https://openrouter.ai/models
     model_cheap: str = "google/gemini-3.1-flash-lite"
     model_strong: str = "anthropic/claude-sonnet-5.5"
