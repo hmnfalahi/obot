@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot as TelegramBot
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import Date, case, cast, func, select
 
 from obot.api.deps import CurrentUser, OwnedBot, OwnedTask, Session, State
@@ -36,8 +36,9 @@ from obot.factory.drafts import start_draft
 from obot.factory.links import create_link
 from obot.i18n import lang_of
 from obot.tasks.apply import add_tasks
+from obot.tasks.events import HookRejected, accept_webhook
 from obot.tasks.schedule import InvalidSchedule, zone
-from obot.tasks.service import cancel_task, live_tasks, set_paused
+from obot.tasks.service import cancel_task, hook_url, live_tasks, set_paused
 from obot.telegram.payments import invoice_args
 from obot.telegram.profile import sync_profile
 
@@ -114,7 +115,9 @@ def _summary(bot: Bot) -> BotSummary:
     )
 
 
-async def _task_out(session: Session, task: Task, owner_tg_id: int) -> TaskOut:
+async def _task_out(
+    session: Session, task: Task, owner_tg_id: int, public_url: str | None = None
+) -> TaskOut:
     last_error = await session.scalar(
         select(TaskRun.error).where(TaskRun.task_id == task.id).order_by(TaskRun.id.desc()).limit(1)
     )
@@ -122,6 +125,8 @@ async def _task_out(session: Session, task: Task, owner_tg_id: int) -> TaskOut:
         id=task.id,
         summary=task.summary,
         instruction=task.instruction,
+        trigger=task.trigger,
+        hook_url=hook_url(public_url, task) if public_url and task.hook_secret else None,
         schedule_kind=task.schedule_kind,
         cron=task.cron,
         timezone=task.timezone,
@@ -134,7 +139,7 @@ async def _task_out(session: Session, task: Task, owner_tg_id: int) -> TaskOut:
     )
 
 
-async def _detail(session: Session, bot: Bot) -> BotDetail:
+async def _detail(session: Session, bot: Bot, public_url: str | None = None) -> BotDetail:
     persona = bot.persona or {}
     owner_tg_id = bot.owner.tg_user_id
     return BotDetail(
@@ -148,7 +153,10 @@ async def _detail(session: Session, bot: Bot) -> BotDetail:
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
             for m in await list_memberships(session, bot.id)
         ],
-        tasks=[await _task_out(session, t, owner_tg_id) for t in await live_tasks(session, bot)],
+        tasks=[
+            await _task_out(session, t, owner_tg_id, public_url)
+            for t in await live_tasks(session, bot)
+        ],
     )
 
 
@@ -159,8 +167,8 @@ async def list_bots(user: CurrentUser, session: Session) -> list[BotSummary]:
 
 
 @router.get("/bots/{bot_id}")
-async def get_bot(bot: OwnedBot, session: Session) -> BotDetail:
-    return await _detail(session, bot)
+async def get_bot(bot: OwnedBot, session: Session, state: State) -> BotDetail:
+    return await _detail(session, bot, state.public_url)
 
 
 @router.patch("/bots/{bot_id}")
@@ -205,7 +213,7 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
             language=persona.get("language", "fa"),
         )
         await sync_profile(token, draft, set_name=True)
-    return await _detail(session, bot)
+    return await _detail(session, bot, state.public_url)
 
 
 @router.get("/bots/{bot_id}/usage")
@@ -275,17 +283,40 @@ async def create_invoice(body: InvoiceIn, user: CurrentUser, state: State) -> In
     return InvoiceOut(link=link)
 
 
+# --- incoming webhooks (WEBHOOK-triggered tasks) ---------------------------------------------
+
+MAX_HOOK_BODY_BYTES = 10_000
+
+
+@router.post("/hooks/{task_id}/{secret}", status_code=202)
+async def incoming_hook(task_id: int, secret: str, request: Request, session: Session) -> dict:
+    """Public endpoint: the secret in the URL is the only credential."""
+    body = (await request.body())[:MAX_HOOK_BODY_BYTES].decode("utf-8", errors="replace")
+    try:
+        await accept_webhook(session, task_id, secret, body or "(empty request)")
+    except HookRejected as e:
+        raise HTTPException(e.status, str(e)) from e
+    return {"status": "queued"}
+
+
 # --- tasks ------------------------------------------------------------------------------------
 
 
 @router.post("/bots/{bot_id}/tasks")
 async def add_task(body: TaskRequest, bot: OwnedBot, session: Session, state: State) -> TaskAddOut:
     sync = await add_tasks(
-        session, state.pricing, state.models.for_tier("cheap"), bot, [body.request]
+        session,
+        state.pricing,
+        state.models.for_tier("cheap"),
+        bot,
+        [body.request],
+        public_url=state.public_url,
     )
     owner_tg_id = bot.owner.tg_user_id
     return TaskAddOut(
-        scheduled=[await _task_out(session, t, owner_tg_id) for t in sync.scheduled],
+        scheduled=[
+            await _task_out(session, t, owner_tg_id, state.public_url) for t in sync.scheduled
+        ],
         rejected=[RejectedOut(summary=r.summary, reason=r.reason) for r in sync.rejected],
     )
 

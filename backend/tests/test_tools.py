@@ -1,6 +1,3 @@
-import asyncio
-import socket
-
 import httpx
 import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
@@ -30,17 +27,6 @@ class FakeMeter:
 
     async def after(self, kind: str) -> None:
         self.used.append(kind)
-
-
-@pytest.fixture
-async def public_dns(monkeypatch):
-    """Resolve every host to a public address so tests need no network."""
-
-    async def fake_getaddrinfo(host, port, **kwargs):
-        address = {"internal.test": "10.0.0.5"}.get(host, "93.184.216.34")
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
-
-    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", fake_getaddrinfo)
 
 
 def client_for(routes: dict[str, httpx.Response]) -> httpx.AsyncClient:

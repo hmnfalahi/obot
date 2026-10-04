@@ -1,4 +1,6 @@
+import asyncio
 import os
+import socket
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -91,3 +93,23 @@ async def api(session, cipher, monkeypatch):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         client.state = state
         yield client
+
+
+# --- network -------------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def public_dns(monkeypatch):
+    """Resolve every host to a public address so tests need no network."""
+
+    loop = asyncio.get_running_loop()
+    real_getaddrinfo = loop.getaddrinfo
+
+    async def fake_getaddrinfo(host, port, **kwargs):
+        # The test database and Redis still resolve normally.
+        if host in ("localhost", "127.0.0.1", "::1"):
+            return await real_getaddrinfo(host, port, **kwargs)
+        address = {"internal.test": "10.0.0.5"}.get(host, "93.184.216.34")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo)

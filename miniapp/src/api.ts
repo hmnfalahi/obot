@@ -39,11 +39,22 @@ export interface Chat {
   is_admin: boolean
 }
 
+export type TriggerKind =
+  | 'schedule'
+  | 'rss'
+  | 'page_change'
+  | 'price'
+  | 'group_keyword'
+  | 'new_member'
+  | 'webhook'
+
 export interface Task {
   id: number
   summary: string
   instruction: string
-  schedule_kind: 'cron' | 'once'
+  trigger: TriggerKind
+  hook_url: string | null
+  schedule_kind: 'cron' | 'once' | null
   cron: string | null
   timezone: string
   destination_chat_id: number

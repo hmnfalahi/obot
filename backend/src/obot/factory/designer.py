@@ -60,7 +60,8 @@ class BotDraft(BaseModel):
             "Scheduled jobs the user asked for, each as one precise sentence with action, "
             "destination and time. Keep one-off requests one-off with their date (e.g. "
             "'Today 2026-10-03 at 15:52, ...') and recurring ones recurring ('Every day at "
-            "08:00, ...'). Mention a timezone only if the user did."
+            "08:00, ...'). Mention a timezone only if the user did. Keep the exact numbers "
+            "and units the user gave (e.g. '110,000 toman'); never convert them."
         ),
     )
     reply_rules: list[ReplyRule] = Field(

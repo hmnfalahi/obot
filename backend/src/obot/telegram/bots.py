@@ -25,12 +25,13 @@ from obot.core.agent import BotProfile, Turn, generate_reply
 from obot.core.rules import rule_note
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot as BotRecord
-from obot.db.models import BotStatus, SenderKind
+from obot.db.models import BotStatus, SenderKind, TriggerKind
 from obot.db.models import Message as StoredMessage
 from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
+from obot.tasks.events import chat_trigger_tasks, enqueue_event, keyword_hit
 from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
 from obot.telegram.conversations import (
@@ -150,6 +151,14 @@ async def on_group_text(
     # Bots' messages only reach us through route_to_bots, never via Telegram.
     if message.from_user.is_bot:
         return
+    await fire_chat_triggers(
+        session,
+        bot_record,
+        message.chat.id,
+        TriggerKind.GROUP_KEYWORD,
+        f"{message.from_user.full_name} wrote in {message.chat.title}: {message.text}",
+        text=message.text,
+    )
     note = None
     if not is_addressed(message, message.bot.id, bot_record.username):
         # Not asked directly: answer only if one of the owner's reply rules says so.
@@ -179,6 +188,16 @@ async def on_new_members(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
     people = [u for u in message.new_chat_members if not u.is_bot]
+    if people:
+        names = ", ".join(u.full_name for u in people)
+        await fire_chat_triggers(
+            session,
+            bot_record,
+            message.chat.id,
+            TriggerKind.NEW_MEMBER,
+            f"{names} joined {message.chat.title}.",
+        )
+        await session.commit()
     rule = welcome_rule(bot_record)
     if not people or rule is None:
         return
@@ -206,6 +225,21 @@ async def on_new_members(
         note=rule_note(rule),
         thread=Thread(root=message.message_id),
     )
+
+
+async def fire_chat_triggers(
+    session: AsyncSession,
+    bot_record: BotRecord,
+    chat_id: int,
+    kind: TriggerKind,
+    payload: str,
+    text: str | None = None,
+) -> None:
+    """Queue the bot's tasks triggered by this group event (run by run_task_events)."""
+    for task in await chat_trigger_tasks(session, bot_record.id, chat_id, kind):
+        if kind == TriggerKind.GROUP_KEYWORD and not keyword_hit(task, text or ""):
+            continue
+        await enqueue_event(session, task, payload)
 
 
 async def _record_incoming(
