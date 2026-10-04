@@ -10,12 +10,13 @@ from sqlalchemy.orm import joinedload
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
 from obot.bots.byok import pays_with_key, reply_model
+from obot.bots.users import user_bots
 from obot.chat.history import ChatScope, record_message
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
 from obot.core.fetch import truncate
 from obot.db.models import Bot as BotRecord
-from obot.db.models import BotStatus, SenderKind, Task, User
+from obot.db.models import SenderKind, Task, User
 from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL
@@ -84,13 +85,15 @@ class StepFailed(Exception):
         self.numbered = numbered
 
 
-async def _step_bot(session, owner_bot: BotRecord, bot_id: int | None, index: int) -> BotRecord:
-    """The bot that runs a step: the task's own bot or an active bot of the same owner."""
-    if bot_id is None or bot_id == owner_bot.id:
-        return owner_bot
-    peer = await session.get(BotRecord, bot_id, options=[joinedload(BotRecord.owner)])
-    if peer is None or peer.owner_id != owner_bot.owner_id or peer.status != BotStatus.ACTIVE:
-        raise StepFailed(index, owner_bot.username, "the bot of this step is not available")
+async def _step_bot(
+    session, task_bot: BotRecord, payer: User, bot_id: int | None, index: int
+) -> BotRecord:
+    """The bot that runs a step: the task's own bot or another bot of the payer's."""
+    if bot_id is None or bot_id == task_bot.id:
+        return task_bot
+    peer = next((b for b in await user_bots(session, payer) if b.id == bot_id), None)
+    if peer is None:
+        raise StepFailed(index, task_bot.username, "the bot of this step is not available")
     return peer
 
 
@@ -158,7 +161,7 @@ async def _run_chain(
     language = (bot_record.persona or {}).get("language")
     output: str | None = None
     for index, step in enumerate(task.steps):
-        step_bot = await _step_bot(session, bot_record, step.get("bot_id"), index)
+        step_bot = await _step_bot(session, bot_record, payer, step.get("bot_id"), index)
         byok = pays_with_key(step_bot, payer)
         if index > 0 or step_bot is not bot_record:
             # execute_task checked the task's own bot before its first step.

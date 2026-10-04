@@ -33,12 +33,13 @@ from obot.api.schemas import (
     TaskRequest,
     TaskUpdate,
     UsageDay,
+    UsedBotOut,
 )
 from obot.billing.usage import count_messages, start_of_day
 from obot.bots.access import sync_access
 from obot.bots.apis import ensure_room, list_endpoints, read_headers, write_endpoint
 from obot.bots.byok import clear_key, key_hint, read_key, set_key, uses_byok
-from obot.bots.users import bot_settings
+from obot.bots.users import bot_settings, leave_bot, user_bots
 from obot.chat.membership import list_memberships
 from obot.core.byok import KeyCheckFailed
 from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
@@ -233,6 +234,30 @@ async def _sync_access(state: ApiState, bot: Bot) -> bool:
 async def list_bots(user: CurrentUser, session: Session) -> list[BotSummary]:
     bots = await session.scalars(select(Bot).where(Bot.owner_id == user.id).order_by(Bot.id))
     return [_summary(b) for b in bots]
+
+
+@router.get("/used-bots")
+async def list_used_bots(user: CurrentUser, session: Session) -> list[UsedBotOut]:
+    """Bots of other people that the user started and may still use."""
+    return [
+        UsedBotOut(
+            id=b.id,
+            username=b.username,
+            display_name=b.display_name,
+            description=(b.persona or {}).get("description", ""),
+        )
+        for b in await user_bots(session, user)
+        if b.owner_id != user.id
+    ]
+
+
+@router.delete("/used-bots/{bot_id}", status_code=204)
+async def remove_used_bot(bot_id: int, user: CurrentUser, session: Session) -> None:
+    """Stop using a bot: it leaves the user's list and their bots stop consulting it."""
+    bot = await session.get(Bot, bot_id)
+    if bot is None:
+        raise HTTPException(404, "no such bot")
+    await leave_bot(session, bot, user.tg_user_id)
 
 
 @router.get("/bots/{bot_id}")

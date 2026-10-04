@@ -23,8 +23,8 @@ For each request return exactly one task:
   e.g. 'every day at 8:00' / 'هر روز ساعت ۸ صبح'.
 - steps: only for a chain, i.e. a request made of several different jobs done one after
   another (e.g. 'get the news, summarize it, translate it, send it') or that names another
-  of the owner's bots for part of the work. List the steps in order; each has an
-  instruction (self-contained, English) and bot: 'self' or one of the owner's other bots
+  of the user's bots for part of the work. List the steps in order; each has an
+  instruction (self-contained, English) and bot: 'self' or one of the user's other bots
   by @username. Each step gets the previous step's output, only the last step's output is
   sent. Then `instruction` is a one-line overview. Leave steps empty for a single job.
   A chain still needs its schedule, cron and the other fields like any task."""
@@ -59,7 +59,7 @@ class KnownChat:
 
 @dataclass(frozen=True)
 class KnownBot:
-    """Another bot of the same owner that chain steps may use."""
+    """Another bot of the user's that chain steps may use (see user_bots)."""
 
     id: int
     username: str
@@ -86,7 +86,7 @@ def build_prompt(
     request_lines = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(requests))
     return (
         f"Now: {now:%Y-%m-%d %H:%M} UTC\nOwner's timezone: {timezone}\n"
-        f"Bot's chats:\n{chat_lines}\nOwner's other bots:\n{peer_lines}\n\n"
+        f"Bot's chats:\n{chat_lines}\nUser's other bots:\n{peer_lines}\n\n"
         f"Requests:\n{request_lines}"
     )
 

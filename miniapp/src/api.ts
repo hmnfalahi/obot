@@ -1,8 +1,8 @@
 import { initData } from './telegram'
 
 export type Lang = 'fa' | 'en'
-export type ToolName = 'web_search' | 'read_url' | 'rss' | 'memory' | 'ask_bots'
-export const TOOLS: ToolName[] = ['web_search', 'read_url', 'rss', 'memory', 'ask_bots']
+export type ToolName = 'web_search' | 'read_url' | 'rss' | 'memory'
+export const TOOLS: ToolName[] = ['web_search', 'read_url', 'rss', 'memory']
 
 export interface Quota {
   used: number
@@ -103,6 +103,14 @@ export interface ApiIn {
 
 export type Visibility = 'private' | 'public'
 
+/** Another person's bot that the user started. */
+export interface UsedBot {
+  id: number
+  username: string
+  display_name: string
+  description: string
+}
+
 export interface AllowedUser {
   id: number
   name: string
@@ -194,6 +202,8 @@ export const api = {
   me: () => request<Me>('GET', '/me'),
   updateMe: (body: Partial<Pick<Me, 'language' | 'timezone'>>) => request<Me>('PATCH', '/me', body),
   bots: () => request<BotSummary[]>('GET', '/bots'),
+  usedBots: () => request<UsedBot[]>('GET', '/used-bots'),
+  removeUsedBot: (id: number) => request<void>('DELETE', `/used-bots/${id}`),
   bot: (id: number) => request<BotDetail>('GET', `/bots/${id}`),
   updateBot: (id: number, body: BotUpdate) => request<BotDetail>('PATCH', `/bots/${id}`, body),
   setByok: (id: number, body: ByokIn) => request<BotDetail>('PUT', `/bots/${id}/byok`, body),

@@ -12,13 +12,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from obot.billing.plans import ModelPrice, Pricing
 from obot.bots.byok import set_key
-from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
+from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.bots.users import join_bot, user_bots
 from obot.config import get_settings
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import Provider
 from obot.core.tools import ToolServices, build_tools
-from obot.db.models import UsageEvent
-from obot.telegram.delegation import Delegator, delegation_note, owner_peers
+from obot.db.models import BotVisibility, UsageEvent
+from obot.telegram.delegation import Delegator, delegation_note
 
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
 
@@ -64,8 +65,8 @@ def runtime_with(session, model, cipher=None, **extra) -> SimpleNamespace:
 
 
 async def test_delegate_answers_with_callee_and_bills_it(session, cipher) -> None:
-    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
-    callee = await make_bot(session, cipher, 2, "fr_bot", tools=["web_search", "ask_bots"])
+    caller = await make_bot(session, cipher, 1, "asst_bot")
+    callee = await make_bot(session, cipher, 2, "fr_bot", tools=["web_search"])
     await session.commit()
     model = AnsweringModel("Bonjour")
     delegate = Delegator(runtime_with(session, model, cipher), caller, caller.owner)
@@ -80,10 +81,11 @@ async def test_delegate_answers_with_callee_and_bills_it(session, cipher) -> Non
 
 
 async def test_whoever_asked_pays_and_never_uses_the_owners_key(session, cipher, redis) -> None:
-    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
+    caller = await make_bot(session, cipher, 1, "asst_bot")
     callee = await make_bot(session, cipher, 2, "fr_bot")
     set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
-    ali = await get_or_create_user(session, 5005)
+    callee.visibility = BotVisibility.PUBLIC
+    ali, _ = await join_bot(session, callee, 5005, None)
     await session.commit()
     runtime, _ = byok_runtime(session, cipher, redis, AnsweringModel("own key"))
 
@@ -96,7 +98,7 @@ async def test_whoever_asked_pays_and_never_uses_the_owners_key(session, cipher,
 
 
 async def test_cannot_ask_bots_of_other_owners_or_itself(session, cipher) -> None:
-    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
+    caller = await make_bot(session, cipher, 1, "asst_bot")
     await make_bot(session, cipher, 3, "stranger_bot", owner=2002)
     await session.commit()
     delegate = Delegator(runtime_with(session, AnsweringModel(), cipher), caller, caller.owner)
@@ -107,15 +109,49 @@ async def test_cannot_ask_bots_of_other_owners_or_itself(session, cipher) -> Non
 
 
 async def test_peers_are_listed_for_the_caller(session, cipher) -> None:
-    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
+    caller = await make_bot(session, cipher, 1, "asst_bot")
     await make_bot(session, cipher, 2, "fr_bot")
     await make_bot(session, cipher, 3, "stranger_bot", owner=2002)
 
-    note = delegation_note(await owner_peers(session, caller))
+    note = delegation_note(await user_bots(session, caller.owner, exclude=caller))
 
     assert "@fr_bot" in note and "fr_bot description" in note
     assert "stranger_bot" not in note
     assert delegation_note([]) is None
+
+
+async def test_a_persons_bots_are_theirs_and_the_ones_they_use(session, cipher) -> None:
+    mine = await make_bot(session, cipher, 1, "mine_bot", owner=5005)
+    public = await make_bot(session, cipher, 2, "public_bot", owner=2002)
+    shared = await make_bot(session, cipher, 3, "shared_bot", owner=2002)
+    unshared = await make_bot(session, cipher, 4, "unshared_bot", owner=2002)
+    unstarted = await make_bot(session, cipher, 5, "unstarted_bot", owner=2002)
+    public.visibility = unstarted.visibility = BotVisibility.PUBLIC
+    shared.allowed_users = [{"id": 5005, "name": "Ali"}]
+    ali = mine.owner
+    for bot in (public, shared, unshared):
+        await join_bot(session, bot, ali.tg_user_id, None)
+
+    names = [b.username for b in await user_bots(session, ali)]
+    assert names == ["mine_bot", "public_bot", "shared_bot"]
+
+    public.visibility = BotVisibility.PRIVATE  # made private again: no longer Ali's
+    assert [b.username for b in await user_bots(session, ali, exclude=mine)] == ["shared_bot"]
+
+
+async def test_bots_can_ask_bots_of_the_person_they_help(session, cipher) -> None:
+    hamid_bot = await make_bot(session, cipher, 1, "gold_bot", owner=2002)
+    hamid_bot.visibility = BotVisibility.PUBLIC
+    ali_bot = await make_bot(session, cipher, 2, "notes_bot", owner=5005)
+    hamid_other = await make_bot(session, cipher, 3, "hamid_secret_bot", owner=2002)
+    ali = ali_bot.owner
+    await join_bot(session, hamid_bot, ali.tg_user_id, None)
+    await session.commit()
+    model = AnsweringModel("from Ali's notes")
+    delegate = Delegator(runtime_with(session, model, cipher), hamid_bot, ali)
+
+    assert await delegate("@notes_bot", "what did I save?") == "from Ali's notes"
+    assert (await delegate(hamid_other.username, "hi")).startswith("ERROR")
 
 
 async def test_ask_bot_tool_calls_the_delegate() -> None:
@@ -139,7 +175,7 @@ async def test_ask_bot_tool_calls_the_delegate() -> None:
         BotProfile("A"),
         [],
         "go",
-        tools=build_tools(["ask_bots"]),
+        tools=build_tools([], delegation=True),
         services=services,
     )
 
@@ -195,7 +231,7 @@ def byok_runtime(session, cipher, redis, own_model):
 
 
 async def test_callee_answers_with_its_own_key_for_free(session, cipher, redis) -> None:
-    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
+    caller = await make_bot(session, cipher, 1, "asst_bot")
     callee = await make_bot(session, cipher, 2, "fr_bot")
     set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
     await session.commit()
@@ -211,7 +247,7 @@ async def test_callee_answers_with_its_own_key_for_free(session, cipher, redis) 
 
 
 async def test_failing_own_key_tells_the_owner_once(session, cipher, redis) -> None:
-    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
+    caller = await make_bot(session, cipher, 1, "asst_bot")
     callee = await make_bot(session, cipher, 2, "fr_bot")
     set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
     await session.commit()

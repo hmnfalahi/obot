@@ -44,6 +44,15 @@ class BotSummary(BaseModel):
     visibility: Literal["private", "public"]
 
 
+class UsedBotOut(BaseModel):
+    """Another person's bot that the user started (SPEC 8.7)."""
+
+    id: int
+    username: str
+    display_name: str
+    description: str
+
+
 class AllowedUserOut(BaseModel):
     id: int
     name: str

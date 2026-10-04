@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import UsageMeter
 from obot.bots.apis import load_endpoints
+from obot.bots.users import user_bots
 from obot.core.custom_api import endpoints_note
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot, User
-from obot.telegram.delegation import DELEGATION_TOOL, Delegator, delegation_note, owner_peers
+from obot.telegram.delegation import Delegator, delegation_note
 from obot.telegram.runtime import Runtime
 
 
@@ -38,9 +39,9 @@ async def toolkit(
 ) -> Toolkit:
     """The bot's tools, metered against `payer` (whoever started the request).
 
-    `delegation` False drops ask_bots (a bot answering for another must not delegate).
+    The bot may consult the payer's other bots (ask_bot) unless `delegation` is False: a
+    bot answering for another must not delegate again.
     """
-    names = [t for t in (bot.tools or []) if delegation or t != DELEGATION_TOOL]
     apis = await load_endpoints(session, runtime.cipher, bot)
     services = ToolServices(
         http=runtime.http,
@@ -48,12 +49,11 @@ async def toolkit(
         tavily_api_key=runtime.tavily_api_key,
         apis=apis,
     )
-    peers = None
-    if DELEGATION_TOOL in names:
+    peers = await user_bots(session, payer, exclude=bot) if delegation else []
+    if peers:
         services.delegate = Delegator(runtime, bot, payer)
-        peers = delegation_note(await owner_peers(session, bot))
     return Toolkit(
-        tools=build_tools(names, apis=bool(apis)),
+        tools=build_tools(bot.tools or [], apis=bool(apis), delegation=bool(peers)),
         services=services,
-        note=join_notes(note, peers, endpoints_note(apis)),
+        note=join_notes(note, delegation_note(peers), endpoints_note(apis)),
     )

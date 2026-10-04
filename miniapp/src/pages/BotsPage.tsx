@@ -1,12 +1,15 @@
-import { api, type Me } from '../api'
+import { useState } from 'react'
+import { api, type Me, type UsedBot } from '../api'
 import type { Route } from '../App'
 import { formatNumber, useI18n } from '../i18n'
 import { useLoad } from '../hooks'
+import { confirm, haptic } from '../telegram'
 import { ErrorBox, Loading } from '../ui'
 
 export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => void }) {
   const { t, lang } = useI18n()
   const bots = useLoad(() => api.bots(), [])
+  const used = useLoad(() => api.usedBots(), [])
   const quota = me.messages_today
 
   return (
@@ -23,6 +26,7 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
         {quota.limit !== null && ` / ${formatNumber(quota.limit, lang)}`}
       </div>
 
+      <h2>{t('madeByMe')}</h2>
       {bots.error && <ErrorBox message={bots.error} onRetry={bots.reload} />}
       {!bots.data && !bots.error && <Loading />}
       {bots.data?.length === 0 && <p className="hint">{t('noBots')}</p>}
@@ -40,6 +44,47 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
       <button className="btn block" onClick={() => navigate({ page: 'new' })}>
         + {t('newBot')}
       </button>
+
+      {used.data && used.data.length > 0 && (
+        <>
+          <h2>{t('usedBots')}</h2>
+          <p className="hint">{t('usedBotsHint')}</p>
+          {used.data.map((bot) => (
+            <UsedBotItem key={bot.id} bot={bot} onRemoved={used.reload} />
+          ))}
+        </>
+      )}
     </>
+  )
+}
+
+function UsedBotItem({ bot, onRemoved }: { bot: UsedBot; onRemoved: () => void }) {
+  const { t } = useI18n()
+  const [error, setError] = useState<string | null>(null)
+
+  const remove = async () => {
+    if (!(await confirm(t('removeUsedConfirm', { username: bot.username })))) return
+    try {
+      await api.removeUsedBot(bot.id)
+      haptic('success')
+      onRemoved()
+    } catch (e) {
+      setError((e as Error).message)
+      haptic('error')
+    }
+  }
+
+  return (
+    <div className="list-item">
+      <div className="row between">
+        <strong>{bot.display_name}</strong>
+        <button className="btn secondary" onClick={remove}>
+          {t('removeFromList')}
+        </button>
+      </div>
+      <div className="hint">@{bot.username}</div>
+      {bot.description && <div>{bot.description}</div>}
+      {error && <p className="error">{error}</p>}
+    </div>
   )
 }

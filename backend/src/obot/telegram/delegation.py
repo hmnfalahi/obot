@@ -1,41 +1,28 @@
-"""Delegation between bots of the same owner (SPEC 8.5, P2-4).
+"""Bots consulting each other behind the scenes (SPEC 8.7).
 
-A bot with the ask_bots tool can put a question to one of its owner's other
-bots. The other bot answers with its own persona and tools, in its own session,
-and cannot delegate further (depth 1). Whoever started the request pays for the
-answer too.
+While answering someone, a bot can put a question to any other bot of that
+person: the ones they made and the ones of others they use (see user_bots).
+It is always available, not a per-bot tool. The other bot answers with its own
+persona and tools, in its own session, and cannot delegate further (depth 1).
+The person who asked pays for the answer too.
 """
 
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
-
 from obot.billing.usage import check_llm_quota, record_llm_usage
 from obot.bots.byok import pays_with_key, reply_model
+from obot.bots.users import user_bots
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
 from obot.core.tools import truncate
-from obot.db.models import Bot, BotStatus, User
+from obot.db.models import Bot, User
 from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
 
-DELEGATION_TOOL = "ask_bots"
 MAX_ANSWER_CHARS = 4000
-
-
-async def owner_peers(session: AsyncSession, bot: Bot) -> list[Bot]:
-    """The owner's other active bots."""
-    rows = await session.scalars(
-        select(Bot)
-        .where(Bot.owner_id == bot.owner_id, Bot.id != bot.id, Bot.status == BotStatus.ACTIVE)
-        .order_by(Bot.id)
-    )
-    return list(rows)
 
 
 def delegation_note(peers: list[Bot]) -> str | None:
@@ -48,8 +35,9 @@ def delegation_note(peers: list[Bot]) -> str | None:
             f"- @{peer.username} ({peer.display_name}){': ' + description if description else ''}"
         )
     return (
-        "With the ask_bot tool you can consult these other bots of your owner when they "
-        "are better suited; they do not see this conversation:\n" + "\n".join(lines)
+        "With the ask_bot tool you can consult these other bots of the person you are "
+        "helping when they are better suited; they do not see this conversation:\n"
+        + "\n".join(lines)
     )
 
 
@@ -61,24 +49,23 @@ class Delegator:
         self._payer_id = payer.id
         self._caller_id = caller.id
         self._caller_name = caller.display_name
-        self._owner_id = caller.owner_id
 
     async def __call__(self, username: str, question: str) -> str:
         runtime = self._runtime
         now = datetime.now(UTC)
         async with runtime.sessionmaker() as session:
-            callee = await session.scalar(
-                select(Bot)
-                .options(joinedload(Bot.owner))
-                .where(
-                    Bot.owner_id == self._owner_id,
-                    Bot.id != self._caller_id,
-                    func.lower(Bot.username) == username.lower(),
-                )
-            )
-            if callee is None or callee.status != BotStatus.ACTIVE:
-                return f"ERROR: there is no active bot @{username} you can ask."
             payer = await session.get(User, self._payer_id)
+            name = username.strip().lstrip("@").lower()
+            callee = next(
+                (
+                    b
+                    for b in await user_bots(session, payer)
+                    if b.id != self._caller_id and b.username.lower() == name
+                ),
+                None,
+            )
+            if callee is None:
+                return f"ERROR: there is no active bot @{username} you can ask."
             byok = pays_with_key(callee, payer)
             quota = await check_llm_quota(session, runtime.pricing, payer, callee, now, byok=byok)
             if not quota.allowed:
@@ -96,8 +83,9 @@ class Delegator:
                 payer,
                 delegation=False,
                 note=(
-                    f"This question comes from {self._caller_name}, another bot of your "
-                    "owner, not from a person. Answer it directly and completely."
+                    f"This question comes from {self._caller_name}, another bot working for "
+                    "someone who uses you, not from a person. Answer it directly and "
+                    "completely."
                 ),
             )
             try:
