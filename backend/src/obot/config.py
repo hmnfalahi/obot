@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
 
+    # Card-to-card payment instructions shown in /buy for users who cannot buy Stars
+    # (e.g. card number and holder); manual top-ups are disabled when unset.
+    manual_payment_text: str | None = None
+
     # Telegram user ids of service admins (comma-separated): kill switch and reports
     admin_tg_ids: str = ""
 

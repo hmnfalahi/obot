@@ -88,6 +88,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "buy.title": "{credits} Obot credits",
         "buy.description": "{credits} credits for your Obot bots: replies, web search and tasks.",
         "buy.done": "✅ {credits} credits added. Balance: {balance}.",
+        "buy.manual": (
+            "Can't buy Stars? Pay by card instead:\n\n{text}\n\n"
+            "Then send a photo of the receipt here and we'll add your credits."
+        ),
+        "receipt.received": "Receipt received. We'll add your credits after checking it.",
+        "receipt.granted": "✅ {credits} credits added. Balance: {balance}.",
+        "receipt.rejected": "Your receipt could not be confirmed. Please contact support.",
     },
     "fa": {
         "quota.daily_messages": "سهمیه‌ی پیام امروزم تموم شده. فردا برمی‌گردم!",
@@ -175,6 +182,13 @@ MESSAGES: dict[str, dict[str, str]] = {
         "buy.title": "{credits} اعتبار Obot",
         "buy.description": "{credits} اعتبار برای ربات‌های Obot: پاسخ‌ها، جستجوی وب و کارها.",
         "buy.done": "✅ {credits} اعتبار اضافه شد. موجودی: {balance}.",
+        "buy.manual": (
+            "نمی‌تونی Stars بخری؟ کارت‌به‌کارت کن:\n\n{text}\n\n"
+            "بعد عکس رسید رو همین‌جا بفرست تا اعتبارت اضافه بشه."
+        ),
+        "receipt.received": "رسید دریافت شد. بعد از بررسی اعتبارت اضافه می‌شه.",
+        "receipt.granted": "✅ {credits} اعتبار اضافه شد. موجودی: {balance}.",
+        "receipt.rejected": "رسیدت تأیید نشد. لطفاً با پشتیبانی تماس بگیر.",
     },
 }
 

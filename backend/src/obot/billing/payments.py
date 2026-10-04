@@ -41,14 +41,57 @@ def package_for_payload(pricing: Pricing, payload: str, currency: str, amount: i
 async def record_purchase(
     session: AsyncSession, user: User, package: StarPackage, charge_id: str
 ) -> bool:
-    """Credit the user and move them to the paid plan. False if already recorded."""
+    """Credit a Stars purchase and move the user to the paid plan. False if already recorded."""
+    return await _credit(
+        session, user, package.id, package.stars, package.credits, charge_id, method="stars"
+    )
+
+
+async def grant_credits(
+    session: AsyncSession,
+    user: User,
+    credits: int,
+    admin_tg_id: int,
+    grant_id: str,
+    package_id: str = "manual",
+    note: str | None = None,
+) -> bool:
+    """Credit a manual (card-to-card) payment. `grant_id` makes a repeated grant a no-op."""
+    return await _credit(
+        session,
+        user,
+        package_id,
+        0,
+        credits,
+        f"manual-{grant_id}",
+        method="manual",
+        granted_by=admin_tg_id,
+        note=note,
+    )
+
+
+async def _credit(
+    session: AsyncSession,
+    user: User,
+    package_id: str,
+    stars: int,
+    credits: int,
+    charge_id: str,
+    *,
+    method: str,
+    granted_by: int | None = None,
+    note: str | None = None,
+) -> bool:
     inserted = await session.scalar(
         insert(Payment)
         .values(
             user_id=user.id,
-            package_id=package.id,
-            stars=package.stars,
-            credits=package.credits,
+            method=method,
+            granted_by=granted_by,
+            note=note,
+            package_id=package_id,
+            stars=stars,
+            credits=credits,
             telegram_charge_id=charge_id,
         )
         .on_conflict_do_nothing(index_elements=[Payment.telegram_charge_id])
@@ -59,7 +102,7 @@ async def record_purchase(
     await session.execute(
         update(User)
         .where(User.id == user.id)
-        .values(credit_balance=User.credit_balance + package.credits, plan=PAID_PLAN)
+        .values(credit_balance=User.credit_balance + credits, plan=PAID_PLAN)
     )
     await session.flush()
     return True
