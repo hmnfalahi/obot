@@ -279,9 +279,21 @@ async def _respond(
         return
     group = inbound.group
     now = datetime.now(UTC)
-    chosen = await reply_model(
-        session, runtime.models, runtime.cipher, runtime.pricing, bot_record, payer
-    )
+    try:
+        chosen = await reply_model(
+            session, runtime.models, runtime.cipher, runtime.pricing, bot_record, payer
+        )
+    except Exception:
+        # E.g. a wallet key that no longer decrypts: still answer, never go silent.
+        log.exception("choosing the model failed for bot %s user %s", bot_record.id, payer.id)
+        await runtime.sender.send_text(
+            inbound.client,
+            inbound.chat_id,
+            "Sorry, something went wrong. Please try again.",
+            group=group,
+            reply_to=inbound.message_id if group else None,
+        )
+        return
     quota = await check_llm_quota(
         session, runtime.pricing, payer, bot_record, now, byok=chosen.byok
     )

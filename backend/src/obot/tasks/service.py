@@ -168,6 +168,10 @@ async def confirm_draft(
         return "this task is no longer a draft"
     if await count_live_tasks(session, user) >= plan.max_scheduled_tasks:
         return f"your plan allows {plan.max_scheduled_tasks} scheduled tasks"
+    if next_run(schedule_of(task), now) is None:
+        task.status, task.next_run_at = TaskStatus.CANCELLED, None
+        await session.flush()
+        return "its time has already passed; ask me again with a new time"
     task.status = TaskStatus.ACTIVE
     if task.next_run_at is None or task.next_run_at <= now:
         advance(task, now)

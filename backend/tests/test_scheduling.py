@@ -171,3 +171,22 @@ async def test_tasks_wait_while_the_user_may_not_use_the_bot(session, cipher, ru
     errors = list(await session.scalars(select(TaskRun.error).order_by(TaskRun.id)))
     assert errors == ["the bot is private now", "the user stopped using the bot"]
     runtime.sender.send_text.assert_not_awaited()
+
+
+async def test_strangers_get_no_tasks_from_a_private_bot(session, cipher, runtime) -> None:
+    from obot.bots.users import has_started
+
+    bot = await public_bot(session, cipher)
+    bot.visibility = BotVisibility.PRIVATE
+    message = Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=ALI.id, type="private"),
+        from_user=ALI,
+        text="/tasks",
+    ).as_(AsyncMock())
+
+    await scheduling.on_tasks(message, session, bot, runtime)
+
+    assert "private" in runtime.sender.send_text.await_args.args[2]
+    assert not await has_started(session, bot, ALI.id)

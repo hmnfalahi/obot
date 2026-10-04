@@ -206,3 +206,26 @@ async def test_stronger_model_hint_is_given_once(session, cipher, redis) -> None
         await bots_module.suggest_stronger_model(inbound, record, ali, runtime)
 
     assert runtime.sender.send_text.await_count == 1
+
+
+async def test_a_broken_model_choice_still_gets_an_answer(session, cipher, monkeypatch) -> None:
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, None)
+
+    async def broken(*args):
+        raise ValueError("cannot decrypt")
+
+    monkeypatch.setattr(bots_module, "reply_model", broken)
+    runtime = SimpleNamespace(models=None, cipher=None, pricing=None, sender=AsyncMock())
+    inbound = bots_module.Inbound(
+        client=AsyncMock(),
+        chat_id=ALI.id,
+        message_id=1,
+        sender_name="Ali",
+        sender_language=None,
+        group=False,
+    )
+
+    await bots_module._respond(inbound, "hi", None, None, session, record, ali, runtime)
+
+    assert "something went wrong" in runtime.sender.send_text.await_args.args[2]
