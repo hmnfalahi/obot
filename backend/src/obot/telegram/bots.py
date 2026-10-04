@@ -1,13 +1,15 @@
 """Handlers shared by every managed bot."""
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from obot.billing.usage import (
     QuotaReason,
@@ -18,19 +20,27 @@ from obot.billing.usage import (
 )
 from obot.bots.service import mark_owner_started
 from obot.chat.history import ChatScope, recent_messages, record_message
-from obot.chat.membership import upsert_membership
+from obot.chat.membership import bots_in_chat, upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
 from obot.core.rules import rule_note
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot as BotRecord
+from obot.db.models import BotStatus, SenderKind
 from obot.db.models import Message as StoredMessage
-from obot.db.models import SenderKind
 from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
 from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
+from obot.telegram.conversations import (
+    Thread,
+    addresses,
+    bot_note,
+    is_new_in_thread,
+    is_skip,
+    peers_note,
+)
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.reply_rules import pick_rule, welcome_rule
 from obot.telegram.runtime import Runtime
@@ -127,7 +137,7 @@ async def on_private_text(
         await resume_waiting(session, bot_record, datetime.now(UTC))
     scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
     incoming = await _record_incoming(session, scope, message)
-    await _respond(message, message.text, incoming, scope, session, bot_record, runtime)
+    await _respond(Inbound.of(message), message.text, incoming, scope, session, bot_record, runtime)
 
 
 @router.message(F.text, F.chat.type.in_(GROUP_TYPES))
@@ -136,7 +146,7 @@ async def on_group_text(
 ) -> None:
     scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
     incoming = await _record_incoming(session, scope, message)
-    # Bot-to-bot conversations arrive in phase 2.
+    # Bots' messages only reach us through route_to_bots, never via Telegram.
     if message.from_user.is_bot:
         return
     note = None
@@ -151,7 +161,15 @@ async def on_group_text(
         note = rule_note(rule)
     text = strip_mention(message.text, bot_record.username) or message.text
     await _respond(
-        message, text, incoming, scope, session, bot_record, runtime, group=True, note=note
+        Inbound.of(message),
+        text,
+        incoming,
+        scope,
+        session,
+        bot_record,
+        runtime,
+        note=note,
+        thread=Thread(root=message.message_id),
     )
 
 
@@ -177,15 +195,15 @@ async def on_new_members(
     )
     await session.commit()
     await _respond(
-        message,
+        Inbound.of(message),
         text,
         incoming,
         scope,
         session,
         bot_record,
         runtime,
-        group=True,
         note=rule_note(rule),
+        thread=Thread(root=message.message_id),
     )
 
 
@@ -213,8 +231,40 @@ def to_turn(stored: StoredMessage, group: bool) -> Turn:
     return Turn(role="user", text=text)
 
 
+@dataclass(frozen=True)
+class Inbound:
+    """What a reply needs to know about the message it answers.
+
+    Built from a Telegram update, or by the server when one Obot bot addresses
+    another in a group (Telegram does not deliver bots' messages to bots).
+    """
+
+    client: Bot  # the replying bot's Telegram client
+    chat_id: int
+    message_id: int
+    sender_name: str
+    sender_language: str | None
+    group: bool
+    from_bot: bool = False
+    # Telegram id of whoever wrote the message being answered.
+    sender_tg_id: int | None = None
+
+    @classmethod
+    def of(cls, message: Message) -> "Inbound":
+        return cls(
+            client=message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            sender_name=message.from_user.full_name,
+            sender_language=message.from_user.language_code,
+            group=message.chat.type in GROUP_TYPES,
+            from_bot=message.from_user.is_bot,
+            sender_tg_id=message.from_user.id,
+        )
+
+
 async def _respond(
-    message: Message,
+    inbound: Inbound,
     text: str,
     incoming: StoredMessage,
     scope: ChatScope,
@@ -222,26 +272,33 @@ async def _respond(
     bot_record: BotRecord,
     runtime: Runtime,
     *,
-    group: bool = False,
     note: str | None = None,
+    thread: Thread | None = None,
 ) -> None:
     owner = bot_record.owner
+    group = inbound.group
     now = datetime.now(UTC)
     quota = await check_llm_quota(session, runtime.pricing, owner, bot_record, now)
     if not quota.allowed:
-        await notify_quota_exhausted(message, bot_record, quota.reason, runtime, now, group)
+        # Another bot cannot read a quota notice; only people get one.
+        if not inbound.from_bot:
+            await notify_quota_exhausted(inbound, bot_record, quota.reason, runtime, now)
         return
 
     history = [
         to_turn(m, group)
         for m in await recent_messages(session, scope, runtime.history_limit, before_id=incoming.id)
     ]
-    user_text = f"{message.from_user.full_name}: {text}" if group else text
+    user_text = f"{inbound.sender_name}: {text}" if group else text
     profile = BotProfile(name=bot_record.display_name, persona=bot_record.persona)
+    if group:
+        peers = await bots_in_chat(session, inbound.chat_id, exclude=bot_record.id)
+        about_peers = peers_note([(p.username, p.display_name) for p in peers])
+        note = "\n\n".join(n for n in (note, about_peers) if n) or None
     memories: list[str] = []
-    reply_to = message.message_id if group else None
+    reply_to = inbound.message_id if group else None
 
-    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    await inbound.client.send_chat_action(inbound.chat_id, ChatAction.TYPING)
     try:
         if MEMORY_TOOL in (bot_record.tools or []):
             memories = await recall_facts(
@@ -265,14 +322,15 @@ async def _respond(
             note=note,
         )
     except Exception:
-        log.exception("agent failed for bot %s chat %s", bot_record.id, message.chat.id)
-        await runtime.sender.send_text(
-            message.bot,
-            message.chat.id,
-            "Sorry, something went wrong. Please try again.",
-            group=group,
-            reply_to=reply_to,
-        )
+        log.exception("agent failed for bot %s chat %s", bot_record.id, inbound.chat_id)
+        if not inbound.from_bot:
+            await runtime.sender.send_text(
+                inbound.client,
+                inbound.chat_id,
+                "Sorry, something went wrong. Please try again.",
+                group=group,
+                reply_to=reply_to,
+            )
         return
 
     usage = await record_llm_usage(
@@ -293,8 +351,11 @@ async def _respond(
         reply.output_tokens,
         usage.credits,
     )
+    if inbound.from_bot and is_skip(reply.text):
+        log.info("bot %s ended a bot conversation in chat %s", bot_record.id, inbound.chat_id)
+        return
     sent = await runtime.sender.send_text(
-        message.bot, message.chat.id, reply.text, group=group, reply_to=reply_to
+        inbound.client, inbound.chat_id, reply.text, group=group, reply_to=reply_to
     )
     await record_message(
         session,
@@ -302,29 +363,138 @@ async def _respond(
         sender_kind=SenderKind.SELF,
         text=reply.text,
         tg_message_id=sent[-1].message_id if sent else None,
-        sender_tg_id=message.bot.id,
+        sender_tg_id=inbound.client.id,
         sender_name=bot_record.display_name,
     )
+    if group and thread is not None and sent:
+        await session.commit()
+        # Replies go to the message's author; we know it, so routing does not depend
+        # on Telegram echoing reply_to_message back.
+        await route_to_bots(
+            runtime,
+            bot_record,
+            inbound.chat_id,
+            sent[-1],
+            reply.text,
+            thread,
+            replied_to=inbound.sender_tg_id,
+        )
+
+
+# --- bot-to-bot routing ----------------------------------------------------------------------
+
+
+async def route_to_bots(
+    runtime: Runtime,
+    sender: BotRecord,
+    chat_id: int,
+    sent: Message,
+    text: str,
+    thread: Thread,
+    replied_to: int | None = None,
+) -> None:
+    """Hand a bot's group message to the Obot bots it addresses (see conversations.py)."""
+    next_thread = thread.next()
+    if not next_thread.can_continue:
+        log.info("bot conversation in chat %s reached its turn limit", chat_id)
+        return
+    if not await is_new_in_thread(runtime.redis, chat_id, thread, text):
+        log.info("bot conversation in chat %s is repeating itself; stopping", chat_id)
+        return
+    if replied_to is None and sent.reply_to_message and sent.reply_to_message.from_user:
+        replied_to = sent.reply_to_message.from_user.id
+    async with runtime.sessionmaker() as session:
+        peers = await bots_in_chat(session, chat_id, exclude=sender.id)
+    for peer in peers:
+        if not addresses(text, replied_to, peer.username, peer.tg_bot_id):
+            continue
+        client = runtime.transport.client(peer.tg_bot_id)
+        if client is None:
+            log.warning("bot %s is addressed in chat %s but not running", peer.id, chat_id)
+            continue
+        log.info(
+            "routing bot %s -> bot %s in chat %s (turn %d)",
+            sender.id,
+            peer.id,
+            chat_id,
+            next_thread.depth,
+        )
+
+        async def deliver(peer_id: int = peer.id, client: Bot = client) -> None:
+            await _deliver_from_bot(
+                runtime, peer_id, client, chat_id, sent, text, sender, next_thread
+            )
+
+        runtime.updates.spawn(peer.tg_bot_id, ("chat", chat_id), deliver)
+
+
+async def _deliver_from_bot(
+    runtime: Runtime,
+    bot_id: int,
+    client: Bot,
+    chat_id: int,
+    sent: Message,
+    text: str,
+    sender: BotRecord,
+    thread: Thread,
+) -> None:
+    async with runtime.sessionmaker() as session:
+        record = await session.get(BotRecord, bot_id, options=[joinedload(BotRecord.owner)])
+        if record is None or record.status != BotStatus.ACTIVE or record.owner.is_disabled:
+            return
+        scope = ChatScope(bot_id=record.id, tg_chat_id=chat_id)
+        incoming = await record_message(
+            session,
+            scope,
+            sender_kind=SenderKind.BOT,
+            text=text,
+            tg_message_id=sent.message_id,
+            sender_tg_id=sender.tg_bot_id,
+            sender_name=sender.display_name,
+        )
+        await session.commit()
+        inbound = Inbound(
+            client=client,
+            chat_id=chat_id,
+            message_id=sent.message_id,
+            sender_name=sender.display_name,
+            sender_language=None,
+            group=True,
+            from_bot=True,
+            sender_tg_id=sender.tg_bot_id,
+        )
+        text_for_bot = strip_mention(text, record.username) or text
+        await _respond(
+            inbound,
+            text_for_bot,
+            incoming,
+            scope,
+            session,
+            record,
+            runtime,
+            note=bot_note(sender.display_name, thread),
+            thread=thread,
+        )
+        await session.commit()
 
 
 async def notify_quota_exhausted(
-    message: Message,
+    inbound: Inbound,
     bot_record: BotRecord,
     reason: QuotaReason,
     runtime: Runtime,
     now: datetime,
-    group: bool,
 ) -> None:
     """Tell the chat (once per day) and the owner (once per day per reason)."""
     owner = bot_record.owner
-    chat_key = f"quota:{bot_record.id}:{message.chat.id}"
+    chat_key = f"quota:{bot_record.id}:{inbound.chat_id}"
     if await first_today(runtime.redis, chat_key, now, owner.timezone):
         await runtime.sender.send_text(
-            message.bot,
-            message.chat.id,
-            t(lang_of(message.from_user.language_code), f"quota.{reason}"),
-            group=group,
-            reply_to=message.message_id if group else None,
+            inbound.client,
+            inbound.chat_id,
+            t(lang_of(inbound.sender_language), f"quota.{reason}"),
+            group=inbound.group,
+            reply_to=inbound.message_id if inbound.group else None,
         )
 
     owner_key = f"quota-owner:{owner.id}:{reason}"

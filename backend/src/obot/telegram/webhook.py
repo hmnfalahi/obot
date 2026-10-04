@@ -41,6 +41,10 @@ class WebhookManager:
     def is_running(self, tg_bot_id: int) -> bool:
         return tg_bot_id in self._bots
 
+    def client(self, tg_bot_id: int) -> Bot | None:
+        entry = self._bots.get(tg_bot_id)
+        return entry[0] if entry else None
+
     async def start(self, bot: Bot, dispatcher: Dispatcher) -> None:
         await self.stop(bot.id, delete_webhook=False)
         await bot.set_webhook(
