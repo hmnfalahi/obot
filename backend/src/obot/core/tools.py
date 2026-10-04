@@ -15,7 +15,7 @@ import httpx
 import trafilatura
 from pydantic_ai import RunContext, Tool
 
-from obot.core.custom_api import API_TOOL, Endpoint, request
+from obot.core.custom_api import API_TOOL, Endpoint, MissingKeys, request
 from obot.core.fetch import FetchError, FetchResult, fetch, truncate
 
 log = logging.getLogger(__name__)
@@ -42,8 +42,12 @@ class ToolServices:
     delegate: Callable[[str, str], Awaitable[str]] | None = None
     # Drafts a scheduled task for the person (request) -> outcome; see schedule_task.
     schedule: Callable[[str], Awaitable[str]] | None = None
-    # The owner's endpoints for call_api, by name; see obot.core.custom_api.
+    # The bot's endpoints for call_api, by name; see obot.core.custom_api.
     apis: dict[str, Endpoint] = field(default_factory=dict)
+    # The person's own values for the endpoints' key slots (never shown to the model).
+    api_keys: dict[str, str] = field(default_factory=dict, repr=False)
+    # Asks the person to set missing keys (names) -> what to tell them; see call_api.
+    ask_for_keys: Callable[[list[str]], Awaitable[str]] | None = None
 
 
 def page_text(result: FetchResult) -> str:
@@ -156,7 +160,7 @@ async def call_api(
     query: dict[str, str] | None = None,
     body: dict[str, Any] | list[Any] | None = None,
 ) -> str:
-    """Call one of your owner's APIs by name (see the list in your instructions).
+    """Call one of the APIs by name (see the list in your instructions).
 
     path_params fills the {placeholders} of its address, query adds URL parameters,
     body is JSON sent with POST, PUT and PATCH.
@@ -168,7 +172,13 @@ async def call_api(
     if refusal := await services.meter.before("api"):
         return f"ERROR: {refusal}"
     try:
-        text = await request(services.http, endpoint, path_params or {}, query or {}, body)
+        text = await request(
+            services.http, endpoint, path_params or {}, query or {}, body, services.api_keys
+        )
+    except MissingKeys as e:
+        if services.ask_for_keys is not None:
+            return await services.ask_for_keys(e.names)
+        return f"ERROR: the user has not set their {', '.join(e.names)} for this bot yet."
     except FetchError as e:
         log.info("call_api %s failed: %s", endpoint.name, e)
         return f"ERROR: calling {endpoint.name} failed: {e}."

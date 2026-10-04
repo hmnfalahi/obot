@@ -1,10 +1,11 @@
 """Owner-defined HTTP endpoints a bot may call (the call_api tool).
 
-The owner fixes the address, method and secret headers; the model only fills
+The owner fixes the address, method and headers; the model only fills
 placeholders in the address, adds query parameters and, for methods with a
-body, sends JSON. Secret headers never reach the model. Like read_url, only
-public hosts are reachable; redirects are not followed, so the headers cannot
-be carried to another host.
+body, sends JSON. Header values may name key slots, e.g. "Bearer {shop_token}":
+each person using the bot fills them with their own keys (SPEC 8.7), and the
+values never reach the model. Like read_url, only public hosts are reachable;
+redirects are not followed, so the headers cannot be carried to another host.
 """
 
 import json
@@ -25,6 +26,8 @@ METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 BODY_METHODS = ("POST", "PUT", "PATCH")
 NAME = re.compile(r"[a-z][a-z0-9_]{0,39}")
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]{0,39})\}")
+# A key slot in a header value; filled with the value the person set for the bot.
+KEY_SLOT = re.compile(r"\{([a-z][a-z0-9_]{0,39})\}")
 HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}")
 # Set by the HTTP client itself; letting owners set them breaks requests or routing.
 RESERVED_HEADERS = {"host", "content-length", "transfer-encoding", "connection"}
@@ -70,6 +73,32 @@ def validate_endpoint(name: str, method: str, url: str, headers: dict[str, str])
             raise InvalidEndpoint(f"header '{key}' is not allowed")
         if len(value) > MAX_HEADER_VALUE or "\n" in value or "\r" in value:
             raise InvalidEndpoint(f"the value of header '{key}' is not allowed")
+        rest = KEY_SLOT.sub("", value)
+        if "{" in rest or "}" in rest:
+            raise InvalidEndpoint(
+                f"in header '{key}', keys look like {{shop_token}}: lowercase latin letters, "
+                "digits and _"
+            )
+
+
+class MissingKeys(Exception):
+    """The person has not set keys an endpoint needs."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(", ".join(names))
+        self.names = names
+
+
+def key_slots(headers: dict[str, str]) -> list[str]:
+    """The keys each person must set for these headers, in order."""
+    return list(dict.fromkeys(n for v in headers.values() for n in KEY_SLOT.findall(v)))
+
+
+def fill_headers(headers: dict[str, str], keys: dict[str, str]) -> dict[str, str]:
+    """Headers with the person's keys in their slots (raises MissingKeys)."""
+    if missing := [n for n in key_slots(headers) if not keys.get(n)]:
+        raise MissingKeys(missing)
+    return {k: KEY_SLOT.sub(lambda m: keys[m.group(1)], v) for k, v in headers.items()}
 
 
 def fill(url: str, params: dict[str, Any]) -> str:
@@ -89,7 +118,7 @@ def endpoints_note(endpoints: dict[str, Endpoint]) -> str | None:
         needs = f"; path_params: {', '.join(params)}" if params else ""
         body = "; takes a JSON body" if e.method in BODY_METHODS else ""
         lines.append(f"- {e.name} ({e.method}{needs}{body}): {e.description}")
-    return "APIs of your owner you can call with call_api:\n" + "\n".join(lines)
+    return "APIs you can call with call_api:\n" + "\n".join(lines)
 
 
 async def request(
@@ -98,8 +127,11 @@ async def request(
     path_params: dict[str, Any],
     query: dict[str, Any],
     body: Any,
+    keys: dict[str, str] | None = None,
 ) -> str:
-    """Call the endpoint; returns the response as text for the model (raises FetchError)."""
+    """Call the endpoint with the person's `keys` in its header slots; returns the response
+    as text for the model (raises FetchError, or MissingKeys before any request)."""
+    headers = fill_headers(endpoint.headers, keys or {})
     # Merged into the query the owner's address may already have (params= would replace it).
     url = str(
         httpx.URL(fill(endpoint.url, path_params)).copy_merge_params(
@@ -113,7 +145,7 @@ async def request(
             endpoint.method,
             url,
             json=body if send_body else None,
-            headers=endpoint.headers,
+            headers=headers,
             follow_redirects=False,
         ) as response:
             if response.is_redirect:

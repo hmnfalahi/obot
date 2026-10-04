@@ -8,7 +8,7 @@ from pydantic_ai import Tool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import UsageMeter
-from obot.bots.apis import load_endpoints
+from obot.bots.apis import key_values, load_endpoints
 from obot.bots.users import user_bots
 from obot.core.custom_api import endpoints_note
 from obot.core.tools import ToolServices, build_tools
@@ -38,19 +38,23 @@ async def toolkit(
     delegation: bool = True,
     note: str | None = None,
     schedule: Callable[[str], Awaitable[str]] | None = None,
+    ask_for_keys: Callable[[list[str]], Awaitable[str]] | None = None,
 ) -> Toolkit:
     """The bot's tools, metered against `payer` (whoever started the request).
 
     The bot may consult the payer's other bots (ask_bot) unless `delegation` is False: a
     bot answering for another must not delegate again. `schedule` (private chats only)
-    lets it draft scheduled tasks for the payer.
+    lets it draft scheduled tasks for the payer, and `ask_for_keys` lets it ask them for
+    keys its APIs need. The payer's own keys fill the APIs' key slots.
     """
-    apis = await load_endpoints(session, runtime.cipher, bot)
+    apis = await load_endpoints(session, bot)
     services = ToolServices(
         http=runtime.http,
         meter=UsageMeter(session, runtime.pricing, payer, bot, now),
         tavily_api_key=runtime.tavily_api_key,
         apis=apis,
+        api_keys=await key_values(session, runtime.cipher, payer, bot) if apis else {},
+        ask_for_keys=ask_for_keys,
         schedule=schedule,
     )
     peers = await user_bots(session, payer, exclude=bot) if delegation else []

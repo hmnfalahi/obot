@@ -52,6 +52,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "To use me, start me in private first.",
         "task.draft": "⏰ New task: {summary}\nNext run: {when}\nSends to: {where}",
         "task.to_me": "you, here",
+        "apikey.needed": "To do this I need your own {names}. Set it once and I'll remember it:",
+        "btn.key_in_chat": "✍️ Send {name} here",
+        "btn.key_in_panel": "⚙️ Set it in the panel",
+        "apikey.send_now": (
+            "Send me your {name} as your next message. I'll store it encrypted and delete "
+            "your message right away. Send any /command to cancel."
+        ),
+        "apikey.saved": "✅ Your {name} is saved. Ask me again.",
         "bot.settings": "Your own key, model and daily limit for me are in your Obot panel.",
         "btn.my_settings": "Open my settings",
         "factory.my_settings": "Your settings for that bot:",
@@ -171,6 +179,14 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "برای استفاده از من، اول توی پیوی استارتم کن.",
         "task.draft": "⏰ کار جدید: {summary}\nاجرای بعدی: {when}\nارسال به: {where}",
         "task.to_me": "خودت، همین‌جا",
+        "apikey.needed": "برای این کار به {names} خودت نیاز دارم. یک بار تنظیمش کن، یادم می‌مونه:",
+        "btn.key_in_chat": "✍️ فرستادن {name} همین‌جا",
+        "btn.key_in_panel": "⚙️ تنظیم در پنل",
+        "apikey.send_now": (
+            "{name} خودت رو توی پیام بعدی بفرست. رمزنگاری‌شده نگهش می‌دارم و پیامت رو فوراً "
+            "پاک می‌کنم. برای لغو هر دستوری با / بفرست."
+        ),
+        "apikey.saved": "✅ {name} تو ذخیره شد. دوباره ازم بخواه.",
         "bot.settings": "کلید و مدل خودت و سقف مصرف روزانه‌ات برای من توی پنل Obot هست.",
         "btn.my_settings": "باز کردن تنظیماتم",
         "factory.my_settings": "تنظیمات تو برای اون ربات:",

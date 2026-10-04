@@ -241,8 +241,13 @@ function Apis({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: BotDe
             </div>
             <div className="hint" dir="ltr" style={{ wordBreak: 'break-all' }}>{item.url}</div>
             <div className="hint">{item.description}</div>
-            {item.header_names.length > 0 && (
-              <div className="hint">{t('apiStoredHeaders', { names: item.header_names.join(', ') })}</div>
+            {Object.entries(item.headers).map(([key, value]) => (
+              <div key={key} className="hint" dir="ltr">
+                {key}: {value}
+              </div>
+            ))}
+            {item.key_slots.length > 0 && (
+              <div className="hint">{t('apiKeySlots', { names: item.key_slots.join(', ') })}</div>
             )}
             <div className="row" style={{ marginTop: 8 }}>
               <button className="btn secondary" onClick={() => setOpen(item.id)}>{t('edit')}</button>
@@ -283,10 +288,8 @@ function ApiForm({
     method: item?.method ?? ('GET' as HttpMethod),
     url: item?.url ?? '',
   })
-  // Stored header values are secret: editing replaces all of them.
-  const [replaceHeaders, setReplaceHeaders] = useState(item === null)
   const [headers, setHeaders] = useState<{ key: string; value: string }[]>(
-    item ? item.header_names.map((key) => ({ key, value: '' })) : [],
+    item ? Object.entries(item.headers).map(([key, value]) => ({ key, value })) : [],
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -299,9 +302,7 @@ function ApiForm({
     setError(null)
     const body = {
       ...form,
-      ...(replaceHeaders
-        ? { headers: Object.fromEntries(headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value])) }
-        : {}),
+      headers: Object.fromEntries(headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value])),
     }
     try {
       onDone(await (item ? api.updateApi(item.id, body) : api.addApi(bot.id, body)))
@@ -344,32 +345,23 @@ function ApiForm({
         onChange={(e) => setForm({ ...form, url: e.target.value })}
       />
       <label>{t('apiHeaders')}</label>
-      {item && (
-        <label className="toggle">
-          {t('apiChangeHeaders')}
-          <input type="checkbox" checked={replaceHeaders} onChange={(e) => setReplaceHeaders(e.target.checked)} />
-        </label>
-      )}
-      {replaceHeaders && (
-        <>
-          {headers.map((h, i) => (
-            <div key={i} className="row">
-              <input dir="ltr" placeholder={t('apiHeaderName')} value={h.key} onChange={(e) => setHeader(i, 'key', e.target.value)} />
-              <input
-                dir="ltr"
-                type="password"
-                autoComplete="off"
-                placeholder={t('apiHeaderValue')}
-                value={h.value}
-                onChange={(e) => setHeader(i, 'value', e.target.value)}
-              />
-            </div>
-          ))}
-          <button className="btn secondary" onClick={() => setHeaders([...headers, { key: '', value: '' }])}>
-            {t('apiAddHeader')}
-          </button>
-        </>
-      )}
+      <p className="hint">{t('apiHeadersHint')}</p>
+      {headers.map((h, i) => (
+        <div key={i} className="row">
+          <input dir="ltr" placeholder={t('apiHeaderName')} value={h.key} onChange={(e) => setHeader(i, 'key', e.target.value)} />
+          <input
+            dir="ltr"
+            placeholder="Bearer {shop_token}"
+            autoCapitalize="off"
+            spellCheck={false}
+            value={h.value}
+            onChange={(e) => setHeader(i, 'value', e.target.value)}
+          />
+        </div>
+      ))}
+      <button className="btn secondary" onClick={() => setHeaders([...headers, { key: '', value: '' }])}>
+        {t('apiAddHeader')}
+      </button>
       <div className="row" style={{ marginTop: 8 }}>
         <button
           className="btn"

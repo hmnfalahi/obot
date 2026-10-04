@@ -11,6 +11,8 @@ from obot.api.deps import ApiState, CurrentUser, OwnedApi, OwnedBot, OwnedTask, 
 from obot.api.schemas import (
     AllowedUserOut,
     ApiIn,
+    ApiKeyIn,
+    ApiKeyStatus,
     ApiOut,
     BotDetail,
     BotSummary,
@@ -36,12 +38,20 @@ from obot.api.schemas import (
 )
 from obot.billing.usage import count_messages, start_of_day
 from obot.bots.access import can_use, sync_access
-from obot.bots.apis import ensure_room, list_endpoints, read_headers, write_endpoint
+from obot.bots.apis import (
+    bot_key_slots,
+    delete_key_value,
+    ensure_room,
+    keys_set,
+    list_endpoints,
+    set_key_value,
+    write_endpoint,
+)
 from obot.bots.byok import delete_key, key_hint, read_key, save_key, wallet, wallet_key
 from obot.bots.users import bot_settings, leave_bot, user_bots
 from obot.chat.membership import list_memberships
 from obot.core.byok import KeyCheckFailed, Provider
-from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
+from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint, key_slots
 from obot.core.fetch import FetchError, ensure_public_host
 from obot.db.models import (
     ApiEndpoint,
@@ -200,7 +210,8 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
                 description=row.description,
                 method=row.method,
                 url=row.url,
-                header_names=list(read_headers(state.cipher, row)),
+                headers=row.headers or {},
+                key_slots=key_slots(row.headers or {}),
             )
             for row in await list_endpoints(session, bot)
         ],
@@ -350,6 +361,7 @@ async def _usable_bot(session: Session, user: User, bot_id: int) -> Bot:
 
 async def _my_settings(session: Session, user: User, bot: Bot) -> MySettingsOut:
     settings = await bot_settings(session, user, bot)
+    slots, done = await bot_key_slots(session, bot), await keys_set(session, user, bot)
     return MySettingsOut(
         bot_id=bot.id,
         username=bot.username,
@@ -361,6 +373,7 @@ async def _my_settings(session: Session, user: User, bot: Bot) -> MySettingsOut:
         model=settings.model,
         daily_credit_cap=settings.daily_credit_cap,
         wallet=[row.provider for row in await wallet(session, user)],
+        api_keys=[ApiKeyStatus(name=n, is_set=n in done) for n in slots],
     )
 
 
@@ -395,6 +408,27 @@ async def put_my_settings(
     settings.model = body.model if body.key_provider else None
     settings.daily_credit_cap = body.daily_credit_cap
     await session.flush()
+    return await _my_settings(session, user, bot)
+
+
+@router.put("/bots/{bot_id}/mine/keys/{name}")
+async def put_api_key(
+    bot_id: int, name: str, body: ApiKeyIn, user: CurrentUser, session: Session, state: State
+) -> MySettingsOut:
+    """Set the user's own value for one of the bot's key slots; it is never sent back."""
+    bot = await _usable_bot(session, user, bot_id)
+    if name not in await bot_key_slots(session, bot):
+        raise HTTPException(404, "this bot needs no such key")
+    await set_key_value(session, state.cipher, user, bot, name, body.value.strip())
+    return await _my_settings(session, user, bot)
+
+
+@router.delete("/bots/{bot_id}/mine/keys/{name}")
+async def delete_api_key(
+    bot_id: int, name: str, user: CurrentUser, session: Session
+) -> MySettingsOut:
+    bot = await _usable_bot(session, user, bot_id)
+    await delete_key_value(session, user, bot, name)
     return await _my_settings(session, user, bot)
 
 
@@ -458,15 +492,12 @@ async def _save_api(session: Session, state: ApiState, row: ApiEndpoint, body: A
     url = body.url.strip()
     try:
         write_endpoint(
-            state.cipher,
             row,
             name=name,
             description=body.description.strip(),
             method=body.method,
             url=url,
-            headers={k.strip(): v.strip() for k, v in body.headers.items()}
-            if body.headers is not None
-            else None,
+            headers={k.strip(): v.strip() for k, v in body.headers.items()},
         )
         # Fail early on private or unknown hosts; calls check again every time.
         await ensure_public_host(PLACEHOLDER.sub("x", url))
