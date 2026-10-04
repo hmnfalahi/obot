@@ -11,12 +11,15 @@ from obot.core.llm import ModelRegistry
 from obot.core.memory import Embedder
 from obot.crypto import TokenCipher
 from obot.telegram.sender import Sender
+from obot.telegram.updates import UpdateQueue
 
 
 class Transport(Protocol):
     """How updates reach us: PollingManager (development) or WebhookManager (production)."""
 
     def is_running(self, tg_bot_id: int) -> bool: ...
+
+    def client(self, tg_bot_id: int) -> Bot | None: ...
 
     async def start(self, bot: Bot, dispatcher: Dispatcher) -> None: ...
 
@@ -45,6 +48,7 @@ class Runtime:
     sender: Sender
     embedder: Embedder
     transport: Transport = field(repr=False, default=None)  # set once the factory is known
+    updates: UpdateQueue = field(repr=False, default=None)
     miniapp_url: str | None = None
     admins: frozenset[int] = frozenset()
     # Abuse reports one person may send per day

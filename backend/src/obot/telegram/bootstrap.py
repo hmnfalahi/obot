@@ -141,6 +141,7 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
     log.info("factory bot @%s, %s mode", me.username, mode)
 
     updates = UpdateQueue()
+    runtime.updates = updates
     if mode == "webhook":
         # Webhook secrets derive from the encryption key, so they never need storing.
         runtime.transport = WebhookManager(

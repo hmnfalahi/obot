@@ -18,19 +18,25 @@ class PollingManager:
     def __init__(self, updates: UpdateQueue) -> None:
         self._updates = updates
         self._tasks: dict[int, asyncio.Task[None]] = {}
+        self._bots: dict[int, Bot] = {}
 
     def is_running(self, tg_bot_id: int) -> bool:
         return tg_bot_id in self._tasks
 
+    def client(self, tg_bot_id: int) -> Bot | None:
+        return self._bots.get(tg_bot_id) if tg_bot_id in self._tasks else None
+
     async def start(self, bot: Bot, dispatcher: Dispatcher) -> None:
         """Start polling `bot`, replacing any poller already running for it."""
         await self.stop(bot.id)
+        self._bots[bot.id] = bot
         self._tasks[bot.id] = asyncio.create_task(
             self._poll(bot, dispatcher), name=f"poll-{bot.id}"
         )
 
     async def stop(self, tg_bot_id: int) -> None:
         task = self._tasks.pop(tg_bot_id, None)
+        self._bots.pop(tg_bot_id, None)
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

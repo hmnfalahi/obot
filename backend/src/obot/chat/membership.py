@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from obot.db.models import BotChat
+from obot.db.models import Bot, BotChat, BotStatus, User
 
 
 async def upsert_membership(
@@ -37,5 +37,22 @@ async def upsert_membership(
 async def list_memberships(session: AsyncSession, bot_id: int) -> list[BotChat]:
     rows = await session.scalars(
         select(BotChat).where(BotChat.bot_id == bot_id, BotChat.is_member.is_(True))
+    )
+    return list(rows)
+
+
+async def bots_in_chat(session: AsyncSession, tg_chat_id: int, exclude: int) -> list[Bot]:
+    """Active Obot bots that are members of a chat, other than `exclude`."""
+    rows = await session.scalars(
+        select(Bot)
+        .join(BotChat, BotChat.bot_id == Bot.id)
+        .join(User, User.id == Bot.owner_id)
+        .where(
+            BotChat.tg_chat_id == tg_chat_id,
+            BotChat.is_member.is_(True),
+            Bot.id != exclude,
+            Bot.status == BotStatus.ACTIVE,
+            User.is_disabled.is_(False),
+        )
     )
     return list(rows)

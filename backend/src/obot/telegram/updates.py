@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable, Hashable
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
@@ -31,6 +32,23 @@ class UpdateQueue:
         task = asyncio.create_task(self._handle(bot, dispatcher, update))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def spawn(self, tg_bot_id: int, key: Hashable, job: Callable[[], Awaitable[None]]) -> None:
+        """Run work for a bot (not from a Telegram update) in order with its chat's updates."""
+        task = asyncio.create_task(self._run_job(tg_bot_id, key, job))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _run_job(
+        self, tg_bot_id: int, key: Hashable, job: Callable[[], Awaitable[None]]
+    ) -> None:
+        # The slot is taken inside the task: the caller may itself hold one.
+        async with self._slots:
+            try:
+                async with self._order.hold((tg_bot_id, key)):
+                    await job()
+            except Exception:
+                log.exception("background job for bot %s failed", tg_bot_id)
 
     async def drain(self) -> None:
         if self._tasks:
