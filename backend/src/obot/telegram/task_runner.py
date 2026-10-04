@@ -8,12 +8,11 @@ from datetime import UTC, datetime
 from aiogram import Bot
 from sqlalchemy.orm import joinedload
 
-from obot.billing.usage import UsageMeter, check_llm_quota, record_llm_usage
+from obot.billing.usage import check_llm_quota, record_llm_usage
 from obot.bots.byok import reply_model, uses_byok
 from obot.chat.history import ChatScope, record_message
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
-from obot.core.tools import ToolServices, build_tools
 from obot.db.models import WATCHER_TRIGGERS, SenderKind, Task, TriggerKind
 from obot.db.models import Bot as BotRecord
 from obot.i18n import lang_of, t
@@ -24,8 +23,8 @@ from obot.tasks.events import claim_events
 from obot.tasks.service import claim_due, record_run
 from obot.tasks.watchers import poll_watchers
 from obot.telegram.conversations import SKIP, is_skip
-from obot.telegram.delegation import DELEGATION_TOOL, Delegator, delegation_note, owner_peers
 from obot.telegram.runtime import Runtime
+from obot.telegram.toolkit import toolkit
 
 log = logging.getLogger(__name__)
 
@@ -151,24 +150,16 @@ async def execute_task(
                     session, runtime.pricing, bot_record, scope, task.instruction, runtime.embedder
                 )
             chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record)
-            services = ToolServices(
-                http=runtime.http,
-                meter=UsageMeter(session, runtime.pricing, owner, bot_record, started),
-                tavily_api_key=runtime.tavily_api_key,
-            )
-            note = None
-            if DELEGATION_TOOL in (bot_record.tools or []):
-                services.delegate = Delegator(runtime, bot_record)
-                note = delegation_note(await owner_peers(session, bot_record))
+            kit = await toolkit(session, runtime, bot_record, started)
             reply = await generate_reply(
                 chosen.model,
                 BotProfile(name=bot_record.display_name, persona=bot_record.persona),
                 [],
                 prompt,
-                tools=build_tools(bot_record.tools or []),
-                services=services,
+                tools=kit.tools,
+                services=kit.services,
                 memories=memories,
-                note=note,
+                note=kit.note,
             )
             await record_llm_usage(
                 session,

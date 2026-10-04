@@ -11,7 +11,7 @@ from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from obot.billing.usage import QuotaReason, UsageMeter, check_llm_quota, record_llm_usage
+from obot.billing.usage import QuotaReason, check_llm_quota, record_llm_usage
 from obot.bots.byok import reply_model, uses_byok
 from obot.bots.service import mark_owner_started
 from obot.chat.history import ChatScope, recent_messages, record_message
@@ -19,7 +19,6 @@ from obot.chat.membership import bots_in_chat, upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
 from obot.core.byok import failure_of
 from obot.core.rules import rule_note
-from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot as BotRecord
 from obot.db.models import BotStatus, SenderKind, TriggerKind
 from obot.db.models import Message as StoredMessage
@@ -39,10 +38,10 @@ from obot.telegram.conversations import (
     is_skip,
     peers_note,
 )
-from obot.telegram.delegation import DELEGATION_TOOL, Delegator, delegation_note, owner_peers
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.reply_rules import pick_rule, welcome_rule
 from obot.telegram.runtime import Runtime
+from obot.telegram.toolkit import toolkit
 
 log = logging.getLogger(__name__)
 
@@ -338,25 +337,17 @@ async def _respond(
                 session, runtime.pricing, bot_record, scope, text, runtime.embedder
             )
         chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record)
-        services = ToolServices(
-            http=runtime.http,
-            meter=UsageMeter(session, runtime.pricing, owner, bot_record, now),
-            tavily_api_key=runtime.tavily_api_key,
-        )
-        if DELEGATION_TOOL in (bot_record.tools or []):
-            services.delegate = Delegator(runtime, bot_record)
-            peers_to_ask = delegation_note(await owner_peers(session, bot_record))
-            note = "\n\n".join(n for n in (note, peers_to_ask) if n) or None
+        kit = await toolkit(session, runtime, bot_record, now, note=note)
         reply = await generate_reply(
             chosen.model,
             profile,
             history,
             user_text,
-            tools=build_tools(bot_record.tools or []),
-            services=services,
+            tools=kit.tools,
+            services=kit.services,
             group=group,
             memories=memories,
-            note=note,
+            note=kit.note,
         )
     except Exception as e:
         log.exception("agent failed for bot %s chat %s", bot_record.id, inbound.chat_id)

@@ -5,9 +5,12 @@ from datetime import UTC, datetime, timedelta
 from aiogram import Bot as TelegramBot
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import Date, case, cast, func, select
+from sqlalchemy.orm import joinedload
 
-from obot.api.deps import ApiState, CurrentUser, OwnedBot, OwnedTask, Session, State
+from obot.api.deps import ApiState, CurrentUser, OwnedApi, OwnedBot, OwnedTask, Session, State
 from obot.api.schemas import (
+    ApiIn,
+    ApiOut,
     BotDetail,
     BotSummary,
     BotUpdate,
@@ -30,12 +33,15 @@ from obot.api.schemas import (
     UsageDay,
 )
 from obot.billing.usage import count_messages, start_of_day
+from obot.bots.apis import ensure_room, list_endpoints, read_headers, write_endpoint
 from obot.bots.byok import clear_key, key_hint, read_key, set_key, uses_byok
 from obot.chat.membership import list_memberships
 from obot.core.byok import KeyCheckFailed
+from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
+from obot.core.fetch import FetchError, ensure_public_host
 from obot.core.rules import parse_rules
 from obot.crypto import TokenCipher
-from obot.db.models import Bot, DraftState, Task, TaskRun, UsageEvent, UsageKind, User
+from obot.db.models import ApiEndpoint, Bot, DraftState, Task, TaskRun, UsageEvent, UsageKind, User
 from obot.factory.designer import BotDraft
 from obot.factory.drafts import start_draft
 from obot.factory.links import create_link
@@ -77,6 +83,7 @@ async def _me(session: Session, state: State, user: User) -> MeOut:
         credit_balance=user.credit_balance,
         max_bots=plan.max_bots,
         max_tasks=plan.max_scheduled_tasks,
+        max_apis=plan.max_api_endpoints,
         messages_today=Quota(
             used=await _count_today(session, user, UsageKind.LLM), limit=plan.daily_llm_messages
         ),
@@ -163,6 +170,17 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
         language=persona.get("language", "fa"),
         model_tier=bot.model_tier,
         byok=_byok(state.cipher, bot),
+        apis=[
+            ApiOut(
+                id=row.id,
+                name=row.name,
+                description=row.description,
+                method=row.method,
+                url=row.url,
+                header_names=list(read_headers(state.cipher, row)),
+            )
+            for row in await list_endpoints(session, bot)
+        ],
         daily_credit_cap=bot.daily_credit_cap,
         chats=[
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
@@ -302,6 +320,66 @@ async def new_bot(body: NewBotIn, user: CurrentUser, session: Session, state: St
         create_link=create_link(state.factory_username, row.suggested_username, body.name),
         suggested_username=row.suggested_username,
     )
+
+
+# --- custom APIs (call_api tool) ----------------------------------------------------------
+
+
+async def _save_api(session: Session, state: ApiState, row: ApiEndpoint, body: ApiIn) -> None:
+    name = body.name.strip().lower()
+    clash = await session.scalar(
+        select(ApiEndpoint.id).where(
+            ApiEndpoint.bot_id == row.bot_id, ApiEndpoint.name == name, ApiEndpoint.id != row.id
+        )
+    )
+    if clash is not None:
+        raise HTTPException(409, f"there is already an API named {name}")
+    url = body.url.strip()
+    try:
+        write_endpoint(
+            state.cipher,
+            row,
+            name=name,
+            description=body.description.strip(),
+            method=body.method,
+            url=url,
+            headers={k.strip(): v.strip() for k, v in body.headers.items()}
+            if body.headers is not None
+            else None,
+        )
+        # Fail early on private or unknown hosts; calls check again every time.
+        await ensure_public_host(PLACEHOLDER.sub("x", url))
+    except (InvalidEndpoint, FetchError) as e:
+        raise HTTPException(422, str(e)) from e
+    await session.flush()
+
+
+@router.post("/bots/{bot_id}/apis")
+async def add_api(body: ApiIn, bot: OwnedBot, session: Session, state: State) -> BotDetail:
+    try:
+        await ensure_room(session, bot, state.pricing.plan(bot.owner.plan).max_api_endpoints)
+    except InvalidEndpoint as e:
+        raise HTTPException(403, str(e)) from e
+    row = ApiEndpoint(bot_id=bot.id)
+    await _save_api(session, state, row, body)
+    session.add(row)
+    await session.flush()
+    return await _detail(session, state, bot)
+
+
+@router.put("/apis/{api_id}")
+async def update_api(body: ApiIn, row: OwnedApi, session: Session, state: State) -> BotDetail:
+    await _save_api(session, state, row, body)
+    bot = await session.get(Bot, row.bot_id, options=[joinedload(Bot.owner)])
+    return await _detail(session, state, bot)
+
+
+@router.delete("/apis/{api_id}")
+async def delete_api(row: OwnedApi, session: Session, state: State) -> BotDetail:
+    bot = await session.get(Bot, row.bot_id, options=[joinedload(Bot.owner)])
+    await session.delete(row)
+    await session.flush()
+    return await _detail(session, state, bot)
 
 
 # --- billing ------------------------------------------------------------------------------

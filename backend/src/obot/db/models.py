@@ -132,6 +132,24 @@ class UsageKind(enum.StrEnum):
     FETCH = "fetch"
     # Background memory extraction and embeddings; not counted as messages.
     MEMORY = "memory"
+    API = "api"  # a call to an owner-defined endpoint (call_api)
+
+
+class ApiEndpoint(Base):
+    """An HTTP endpoint of the owner that a bot may call; see obot.core.custom_api."""
+
+    __tablename__ = "api_endpoints"
+    __table_args__ = (UniqueConstraint("bot_id", "name"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(40))
+    description: Mapped[str] = mapped_column(String(500))
+    method: Mapped[str] = mapped_column(String(8))
+    url: Mapped[str] = mapped_column(String(2048))
+    # JSON object of secret headers, AES-GCM encrypted and bound to the bot; see obot.bots.apis
+    headers_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class UsageEvent(Base):

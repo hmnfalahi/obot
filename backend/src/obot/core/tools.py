@@ -7,19 +7,19 @@ bot can tell the user what went wrong instead of failing the whole reply.
 
 import logging
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 import feedparser
 import httpx
 import trafilatura
 from pydantic_ai import RunContext, Tool
 
-from obot.core.fetch import FetchError, FetchResult, fetch
+from obot.core.custom_api import API_TOOL, Endpoint, request
+from obot.core.fetch import FetchError, FetchResult, fetch, truncate
 
 log = logging.getLogger(__name__)
 
-MAX_TOOL_TEXT = 8000
 MAX_FEED_ITEMS = 10
 SEARCH_RESULTS = 5
 TAVILY_URL = "https://api.tavily.com/search"
@@ -40,10 +40,8 @@ class ToolServices:
     tavily_api_key: str | None = None
     # Asks another bot of the same owner (username, question) -> answer; see ask_bot.
     delegate: Callable[[str, str], Awaitable[str]] | None = None
-
-
-def truncate(text: str, limit: int = MAX_TOOL_TEXT) -> str:
-    return text if len(text) <= limit else text[:limit] + "\n[...truncated]"
+    # The owner's endpoints for call_api, by name; see obot.core.custom_api.
+    apis: dict[str, Endpoint] = field(default_factory=dict)
 
 
 def page_text(result: FetchResult) -> str:
@@ -137,14 +135,46 @@ async def ask_bot(ctx: RunContext[ToolServices], username: str, question: str) -
     return await ctx.deps.delegate(username.strip().lstrip("@"), question)
 
 
+async def call_api(
+    ctx: RunContext[ToolServices],
+    name: str,
+    path_params: dict[str, str] | None = None,
+    query: dict[str, str] | None = None,
+    body: dict[str, Any] | list[Any] | None = None,
+) -> str:
+    """Call one of your owner's APIs by name (see the list in your instructions).
+
+    path_params fills the {placeholders} of its address, query adds URL parameters,
+    body is JSON sent with POST, PUT and PATCH.
+    """
+    services = ctx.deps
+    endpoint = services.apis.get(name.strip())
+    if endpoint is None:
+        return f"ERROR: there is no API named '{name}'."
+    if refusal := await services.meter.before("api"):
+        return f"ERROR: {refusal}"
+    try:
+        text = await request(services.http, endpoint, path_params or {}, query or {}, body)
+    except FetchError as e:
+        log.info("call_api %s failed: %s", endpoint.name, e)
+        return f"ERROR: calling {endpoint.name} failed: {e}."
+    await services.meter.after("api")
+    return text
+
+
 TOOLS = {
     "web_search": Tool(web_search),
     "read_url": Tool(read_url),
     "rss": Tool(read_rss),
     "ask_bots": Tool(ask_bot),
+    API_TOOL: Tool(call_api),
 }
 
 
-def build_tools(enabled: Iterable[str]) -> list[Tool[ToolServices]]:
-    """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped."""
-    return [TOOLS[name] for name in enabled if name in TOOLS]
+def build_tools(enabled: Iterable[str], *, apis: bool = False) -> list[Tool[ToolServices]]:
+    """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped.
+
+    `apis`: the bot has endpoints of its owner, so it gets call_api.
+    """
+    names = [*enabled, API_TOOL] if apis else list(enabled)
+    return [TOOLS[name] for name in dict.fromkeys(names) if name in TOOLS]

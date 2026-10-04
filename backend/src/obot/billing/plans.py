@@ -20,6 +20,7 @@ class Plan(BaseModel):
     min_task_interval_minutes: int
     daily_web_searches: int
     knowledge_bytes: int
+    max_api_endpoints: int
 
 
 class StarPackage(BaseModel):
