@@ -42,6 +42,7 @@ export function BotPage({ id, me, navigate }: { id: number; me: Me; navigate: (r
         {t('mySettingsForBot')}
       </button>
       <ProfileForm bot={data} onSaved={bot.set} />
+      <Avatar bot={data} />
       <Access bot={data} me={me} onSaved={bot.set} />
       <Apis bot={data} me={me} onSaved={bot.set} />
       <Chats bot={data} />
@@ -113,6 +114,46 @@ function Access({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: Bot
         </button>
       )}
       {error && <p className="error">{error}</p>}
+    </div>
+  )
+}
+
+/** Uploads a profile photo; the server crops it to a square JPEG for Telegram. */
+function Avatar({ bot }: { bot: BotDetail }) {
+  const { t } = useI18n()
+  const [status, setStatus] = useState<'idle' | 'uploading' | 'done' | string>('idle')
+
+  const upload = async (file: File) => {
+    setStatus('uploading')
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(file)
+      })
+      await api.setAvatar(bot.id, dataUrl.slice(dataUrl.indexOf(',') + 1))
+      setStatus('done')
+      haptic('success')
+    } catch (e) {
+      setStatus((e as Error).message)
+      haptic('error')
+    }
+  }
+
+  return (
+    <div className="card">
+      <label>{t('avatar')}</label>
+      <p className="hint">{t('avatarHint')}</p>
+      <input
+        type="file"
+        accept="image/*"
+        disabled={status === 'uploading'}
+        onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
+      />
+      {status === 'uploading' && <p className="hint">{t('loading')}</p>}
+      {status === 'done' && <p className="hint">{t('avatarDone')}</p>}
+      {!['idle', 'uploading', 'done'].includes(status) && <p className="error">{status}</p>}
     </div>
   )
 }
