@@ -1,4 +1,5 @@
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -18,7 +19,7 @@ from obot.db.models import (
     TriggerKind,
     User,
 )
-from obot.tasks.planner import KnownChat, PlannedTask
+from obot.tasks.planner import KnownBot, KnownChat, PlannedStep, PlannedTask
 from obot.tasks.schedule import InvalidSchedule, Schedule, next_run, validate, zone
 
 LIVE_STATUSES = (TaskStatus.ACTIVE, TaskStatus.WAITING_START, TaskStatus.PAUSED)
@@ -70,8 +71,9 @@ def build_tasks(
     now: datetime,
     *,
     public_url: str | None = None,
+    peers: Sequence[KnownBot] = (),
 ) -> tuple[list[Task], list[Rejected]]:
-    """Validate planned tasks against the plan and the bot's chats (no I/O)."""
+    """Validate planned tasks against the plan, the bot's chats and the owner's bots (no I/O)."""
     accepted: list[Task] = []
     rejected: list[Rejected] = []
     chat_ids = {c.id for c in chats}
@@ -91,6 +93,7 @@ def build_tasks(
                 destination_chat_id=destination,
             )
             _configure_trigger(task, item, chat_ids, plan, now, public_url)
+            task.steps = _chain(item.steps, bot, peers, plan)
         except InvalidSchedule as e:
             rejected.append(Rejected(item.summary, str(e)))
             continue
@@ -100,6 +103,26 @@ def build_tasks(
         )
         accepted.append(task)
     return accepted, rejected
+
+
+def _chain(steps: list[PlannedStep], bot: Bot, peers: Sequence[KnownBot], plan: Plan) -> list[dict]:
+    """A chain's steps with bots resolved; [] for a single-step task."""
+    if len(steps) < 2:
+        return []
+    if len(steps) > plan.max_chain_steps:
+        raise InvalidSchedule(f"a chain can have at most {plan.max_chain_steps} steps")
+    by_name = {p.username.lower(): p.id for p in peers}
+    chain = []
+    for step in steps:
+        name = step.bot.strip().lstrip("@").lower()
+        if name in ("", "self", bot.username.lower()):
+            bot_id = None
+        elif name in by_name:
+            bot_id = by_name[name]
+        else:
+            raise InvalidSchedule(f"@{name} is not one of your active bots")
+        chain.append({"instruction": step.instruction, "bot_id": bot_id})
+    return chain
 
 
 def _chat_or_owner(value: str | None, bot: Bot, chat_ids: set[int]) -> int:

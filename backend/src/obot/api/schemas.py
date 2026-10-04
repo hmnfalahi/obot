@@ -49,6 +49,12 @@ class ChatOut(BaseModel):
     is_admin: bool
 
 
+class StepOut(BaseModel):
+    instruction: str
+    # None: the task's own bot
+    bot_username: str | None
+
+
 class TaskOut(BaseModel):
     id: int
     summary: str
@@ -64,6 +70,7 @@ class TaskOut(BaseModel):
     next_run_at: datetime | None
     last_run_at: datetime | None
     last_error: str | None
+    steps: list[StepOut]
 
 
 class ByokOut(BaseModel):

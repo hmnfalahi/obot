@@ -49,6 +49,12 @@ export type TriggerKind =
   | 'new_member'
   | 'webhook'
 
+export interface TaskStep {
+  instruction: string
+  /** null: the task's own bot */
+  bot_username: string | null
+}
+
 export interface Task {
   id: number
   summary: string
@@ -64,6 +70,7 @@ export interface Task {
   next_run_at: string | null
   last_run_at: string | null
   last_error: string | null
+  steps: TaskStep[]
 }
 
 export type RuleKind = 'keyword' | 'regex' | 'topic' | 'new_member'

@@ -535,6 +535,18 @@ function TaskCard(props: {
       <div className="hint">
         {t(`trigger.${task.trigger}`)} · {destination}
       </div>
+      {task.steps.length > 0 && (
+        <div className="hint">
+          {t('chainSteps')}
+          <ol style={{ margin: '4px 0', paddingInlineStart: 20 }}>
+            {task.steps.map((step, i) => (
+              <li key={i}>
+                <span dir="ltr">{step.bot_username ? `@${step.bot_username}` : t('thisBot')}</span>: {step.instruction}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
       {task.hook_url && (
         <div className="hint">
           {t('hookUrl')}
