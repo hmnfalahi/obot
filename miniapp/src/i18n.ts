@@ -6,6 +6,11 @@ const en = {
   newBot: 'New bot',
   settings: 'Settings',
   noBots: 'You have no bots yet.',
+  madeByMe: 'Made by me',
+  usedBots: 'Bots I use',
+  usedBotsHint: 'Bots of other people you started. Your bots can consult them, and you pay for what you use.',
+  removeFromList: 'Remove',
+  removeUsedConfirm: 'Remove @{username} from your bots? You can start it again any time.',
   loading: 'Loading…',
   error: 'Something went wrong',
   retry: 'Try again',
@@ -107,7 +112,6 @@ const en = {
   'tool.read_url': 'Read web pages',
   'tool.rss': 'RSS feeds',
   'tool.memory': 'Long-term memory',
-  'tool.ask_bots': 'Ask my other bots',
 }
 
 type Key = keyof typeof en
@@ -117,6 +121,11 @@ const fa: Record<Key, string> = {
   newBot: 'ربات جدید',
   settings: 'تنظیمات',
   noBots: 'هنوز رباتی نداری.',
+  madeByMe: 'ساخته‌ی من',
+  usedBots: 'ربات‌هایی که استفاده می‌کنم',
+  usedBotsHint: 'ربات‌های دیگران که استارت کردی. ربات‌هات می‌تونن ازشون کمک بگیرن و هزینه‌ی استفاده با خودته.',
+  removeFromList: 'حذف',
+  removeUsedConfirm: '@{username} از ربات‌هات حذف بشه؟ هر وقت بخوای می‌تونی دوباره استارتش کنی.',
   loading: 'در حال بارگذاری…',
   error: 'مشکلی پیش اومد',
   retry: 'دوباره امتحان کن',
@@ -218,7 +227,6 @@ const fa: Record<Key, string> = {
   'tool.read_url': 'خواندن صفحه‌ی وب',
   'tool.rss': 'خبرخوان RSS',
   'tool.memory': 'حافظه‌ی بلندمدت',
-  'tool.ask_bots': 'کمک گرفتن از ربات‌های دیگرم',
 }
 
 const catalogs: Record<Lang, Record<Key, string>> = { en, fa }

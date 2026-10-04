@@ -162,19 +162,26 @@ async def call_api(
     return text
 
 
+DELEGATION_TOOL = "ask_bots"
+
 TOOLS = {
     "web_search": Tool(web_search),
     "read_url": Tool(read_url),
     "rss": Tool(read_rss),
-    "ask_bots": Tool(ask_bot),
+    DELEGATION_TOOL: Tool(ask_bot),
     API_TOOL: Tool(call_api),
 }
 
 
-def build_tools(enabled: Iterable[str], *, apis: bool = False) -> list[Tool[ToolServices]]:
+def build_tools(
+    enabled: Iterable[str], *, apis: bool = False, delegation: bool = False
+) -> list[Tool[ToolServices]]:
     """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped.
 
-    `apis`: the bot has endpoints of its owner, so it gets call_api.
+    `apis`: the bot has endpoints of its owner, so it gets call_api. `delegation`: there are
+    other bots of the person to consult, so it gets ask_bot (never configured per bot).
     """
-    names = [*enabled, API_TOOL] if apis else list(enabled)
+    names = [t for t in enabled if t != DELEGATION_TOOL]
+    names += [API_TOOL] if apis else []
+    names += [DELEGATION_TOOL] if delegation else []
     return [TOOLS[name] for name in dict.fromkeys(names) if name in TOOLS]

@@ -5,13 +5,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from pydantic_ai.models import Model
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
 from obot.billing.usage import record_llm_usage
+from obot.bots.users import user_bots
 from obot.chat.membership import list_memberships
-from obot.db.models import Bot, BotStatus, Task, UsageKind
+from obot.db.models import Bot, Task, UsageKind
 from obot.tasks.planner import KnownBot, KnownChat, plan_tasks
 from obot.tasks.service import Rejected, build_tasks, count_live_tasks, replace_bot_tasks
 
@@ -82,11 +82,7 @@ async def _plan(
     ]
     peers = [
         KnownBot(b.id, b.username, (b.persona or {}).get("description", ""))
-        for b in await session.scalars(
-            select(Bot)
-            .where(Bot.owner_id == owner.id, Bot.id != bot.id, Bot.status == BotStatus.ACTIVE)
-            .order_by(Bot.id)
-        )
+        for b in await user_bots(session, owner, exclude=bot)
     ]
     result = await plan_tasks(model, requests, owner.timezone, chats, now, peers)
     # Planning is setup work: billed like memory, not counted as a message.

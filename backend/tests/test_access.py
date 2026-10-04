@@ -155,3 +155,23 @@ async def test_people_chosen_in_the_factory_replace_the_list(session, cipher, mo
 
     assert bot.allowed_users == [{"id": ALI.id, "name": "Ali R"}]
     assert synced == [[ALI.id]]
+
+
+async def test_used_bots_are_listed_and_can_be_removed(api) -> None:
+    from obot.bots.users import join_bot
+    from tests.test_api import BOB
+
+    bot_id = await make_api_bot(api, ALICE, 72)
+    async with api.state.sessionmaker() as session:
+        record = await session.get(BotRecord, bot_id, options=[joinedload(BotRecord.owner)])
+        record.visibility = BotVisibility.PUBLIC
+        await join_bot(session, record, BOB["id"], "en")
+        await session.commit()
+
+    listed = (await api.get("/api/used-bots", headers=auth(BOB))).json()
+    removed = await api.delete(f"/api/used-bots/{bot_id}", headers=auth(BOB))
+    after = (await api.get("/api/used-bots", headers=auth(BOB))).json()
+
+    assert [b["id"] for b in listed] == [bot_id]
+    assert removed.status_code == 204 and after == []
+    assert (await api.get("/api/used-bots", headers=auth(ALICE))).json() == []  # own bots

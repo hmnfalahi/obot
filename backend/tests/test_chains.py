@@ -287,7 +287,6 @@ async def test_a_peer_first_step_checks_its_quota(session, cipher) -> None:
 async def test_peer_steps_cannot_delegate(session, cipher) -> None:
     bot = await make_bot(session, cipher, 1, "news_bot")
     peer = await make_bot(session, cipher, 2, "fr_bot")
-    bot.tools = peer.tools = ["ask_bots"]
     task = await chain_of(session, bot, peer)
     model = Scripted()
     runtime = runtime_for(session, cipher, model)
