@@ -26,6 +26,7 @@ from obot.api.schemas import (
     PackageOut,
     Quota,
     RejectedOut,
+    StepOut,
     TaskAddOut,
     TaskOut,
     TaskRequest,
@@ -135,6 +136,11 @@ async def _task_out(
     last_error = await session.scalar(
         select(TaskRun.error).where(TaskRun.task_id == task.id).order_by(TaskRun.id.desc()).limit(1)
     )
+    peer_ids = {s["bot_id"] for s in task.steps or [] if s.get("bot_id")}
+    usernames: dict[int, str] = {}
+    if peer_ids:
+        rows = await session.execute(select(Bot.id, Bot.username).where(Bot.id.in_(peer_ids)))
+        usernames = dict(rows.all())
     return TaskOut(
         id=task.id,
         summary=task.summary,
@@ -150,6 +156,10 @@ async def _task_out(
         next_run_at=task.next_run_at,
         last_run_at=task.last_run_at,
         last_error=last_error,
+        steps=[
+            StepOut(instruction=s["instruction"], bot_username=usernames.get(s.get("bot_id")))
+            for s in task.steps or []
+        ],
     )
 
 

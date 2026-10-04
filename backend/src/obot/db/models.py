@@ -329,6 +329,9 @@ class Task(Base):
     # remember between polls (seen feed items, page hash, last price side).
     trigger_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     trigger_state: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    # A chain: [{"instruction": str, "bot_id": int | None}, ...] run in order, each step's
+    # output feeding the next; bot_id None is this bot. Empty for a single-step task.
+    steps: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
     # Secret part of the webhook URL of WEBHOOK tasks.
     hook_secret: Mapped[str | None] = mapped_column(String(64))
     # Only for SCHEDULE tasks.

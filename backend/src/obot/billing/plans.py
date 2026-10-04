@@ -21,6 +21,7 @@ class Plan(BaseModel):
     daily_web_searches: int
     knowledge_bytes: int
     max_api_endpoints: int
+    max_chain_steps: int
 
 
 class StarPackage(BaseModel):
