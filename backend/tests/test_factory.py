@@ -16,7 +16,6 @@ from obot.factory.drafts import (
     apply_draft,
     existing_bot_drafts,
     get_active_draft,
-    requested_tasks,
     start_draft,
     take_awaiting_draft,
     update_draft,
@@ -30,7 +29,6 @@ DRAFT = BotDraft(
     system_prompt="You report the USD/IRR price briefly.",
     language="fa",
     tools=[ToolName.READ_URL],
-    tasks=["Every day at 08:00 Asia/Tehran, read tgju.org and send the dollar price to the owner."],
 )
 
 
@@ -99,7 +97,6 @@ async def test_new_draft_flow_applies_to_created_bot(session, cipher) -> None:
     assert bot.tools == ["read_url"]
     assert row.state == DraftState.APPLIED and row.bot_id == bot.id
     assert await get_active_draft(session, owner) is None
-    assert await requested_tasks(session, bot) == DRAFT.tasks
 
 
 async def test_starting_a_draft_cancels_the_previous_one(session) -> None:
@@ -134,7 +131,6 @@ async def test_existing_bots_are_described_for_the_designer(session, cipher) -> 
 
     assert existing.username == "dw_bot"
     assert existing.draft.system_prompt == DRAFT.system_prompt
-    assert existing.draft.tasks == DRAFT.tasks
 
 
 async def test_edit_draft_targets_bot(session, cipher) -> None:
@@ -147,7 +143,7 @@ async def test_edit_draft_targets_bot(session, cipher) -> None:
     assert row.suggested_username is None
 
 
-async def test_card_escapes_html_and_lists_tasks(session) -> None:
+async def test_card_escapes_html(session) -> None:
     owner = await get_or_create_user(session, 1001)
     row = await start_draft(
         session, owner, DRAFT.model_copy(update={"name": "<b>x</b>"}), last_reply=None
@@ -157,4 +153,3 @@ async def test_card_escapes_html_and_lists_tasks(session) -> None:
 
     assert "&lt;b&gt;x&lt;/b&gt;" in card
     assert "read web pages" in card
-    assert "tgju.org" in card

@@ -16,9 +16,14 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
     <>
       <div className="row between">
         <h1>{t('myBots')}</h1>
-        <button className="btn secondary" onClick={() => navigate({ page: 'settings' })}>
-          {t('settings')}
-        </button>
+        <div className="row">
+          <button className="btn secondary" onClick={() => navigate({ page: 'tasks' })}>
+            {t('myTasks')}
+          </button>
+          <button className="btn secondary" onClick={() => navigate({ page: 'settings' })}>
+            {t('settings')}
+          </button>
+        </div>
       </div>
 
       <div className="card hint">

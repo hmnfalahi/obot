@@ -90,17 +90,6 @@ async def apply_draft(session: AsyncSession, row: FactoryDraft, bot: Bot) -> Non
     await session.flush()
 
 
-async def requested_tasks(session: AsyncSession, bot: Bot) -> list[str]:
-    """Tasks of the latest applied draft. Scheduling them arrives in SPEC task 9."""
-    row = await session.scalar(
-        select(FactoryDraft)
-        .where(FactoryDraft.bot_id == bot.id, FactoryDraft.state == DraftState.APPLIED)
-        .order_by(FactoryDraft.id.desc())
-        .limit(1)
-    )
-    return draft_of(row).tasks if row else []
-
-
 async def existing_bot_drafts(session: AsyncSession, user: User) -> list[ExistingBot]:
     bots = await session.scalars(select(Bot).where(Bot.owner_id == user.id).order_by(Bot.id))
     result = []
@@ -113,7 +102,6 @@ async def existing_bot_drafts(session: AsyncSession, user: User) -> list[Existin
             system_prompt=persona.get("system_prompt", ""),
             language=persona.get("language", "en"),
             tools=bot.tools or [],
-            tasks=await requested_tasks(session, bot),
         )
         result.append(ExistingBot(username=bot.username, draft=draft))
     return result

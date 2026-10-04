@@ -36,8 +36,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.new": "📝 New bot draft",
         "card.edit": "📝 Changes to @{username}",
         "card.tools": "Tools",
-        "card.tasks": "Tasks",
-        "card.tasks_note": "",
         "card.hint": "Send a message to change anything.",
         "btn.create": "✅ Create bot",
         "btn.save": "💾 Save",
@@ -52,6 +50,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.memory": "memory",
         "forget.done": "Done — I forgot everything about this chat.",
         "group.start_first": "To use me, start me in private first.",
+        "task.draft": "⏰ New task: {summary}\nNext run: {when}\nSends to: {where}",
+        "task.to_me": "you, here",
+        "bot.hello": (
+            "Hi! I'm {name}. {description}\n\nAsk me anything. I can also do things for you on "
+            "a schedule, e.g. every morning; /tasks lists them."
+        ),
+        "btn.task_confirm": "✅ Confirm",
+        "btn.task_cancel": "❌ Cancel",
+        "task.confirmed": "✅ Scheduled: {summary} (next run: {when})",
+        "task.cancelled": "Cancelled.",
+        "task.cannot_confirm": "⚠️ Could not start it: {reason}",
+        "task.not_yours": "This task is not yours.",
+        "tasks.list_header": "Your tasks with this bot:",
+        "tasks.list_empty": "You have no tasks with this bot. Just tell me what to do and when.",
+        "tasks.paused": "paused",
+        "tasks.next_run": "next: {when}",
+        "task.failed": '⚠️ Your task "{summary}" did not run: {error}',
         "bot.private": "This bot is private; only its owner and people they chose can use it.",
         "access.pick": (
             "Choose up to {limit} people who may use @{username}. "
@@ -74,14 +89,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "owner.bot_enabled": "✅ @{username} was enabled again.",
         "owner.banned": "⛔ Your Obot account was suspended for breaking the rules.",
-        "tasks.scheduled": "⏰ Scheduled for @{username}:",
-        "tasks.next": "next: {when}",
-        "tasks.rejected": "⚠️ Not scheduled:",
-        "tasks.waiting": "Tasks that message you start after you press Start in @{username}.",
-        "tasks.none": "@{username} has no scheduled tasks now.",
-        "owner.task_waiting": (
-            "@{username} has a scheduled task for you, but you haven't pressed Start in it yet."
-        ),
         "owner.task_failed": '⚠️ Task "{summary}" of @{username} failed: {error}',
         "forget.admins_only": "Only group admins can do that.",
         "buy.menu": (
@@ -143,8 +150,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.new": "📝 پیش‌نویس ربات جدید",
         "card.edit": "📝 تغییرات @{username}",
         "card.tools": "ابزارها",
-        "card.tasks": "کارها",
-        "card.tasks_note": "",
         "card.hint": "برای تغییر هر چیزی پیام بده.",
         "btn.create": "✅ ساخت ربات",
         "btn.save": "💾 ذخیره",
@@ -159,6 +164,23 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.memory": "حافظه",
         "forget.done": "انجام شد — هر چی درباره‌ی این چت می‌دونستم پاک شد.",
         "group.start_first": "برای استفاده از من، اول توی پیوی استارتم کن.",
+        "task.draft": "⏰ کار جدید: {summary}\nاجرای بعدی: {when}\nارسال به: {where}",
+        "task.to_me": "خودت، همین‌جا",
+        "bot.hello": (
+            "سلام! من {name} هستم. {description}\n\nهر چی می‌خوای بپرس. می‌تونم کارهایی رو هم "
+            "سر وقت برات انجام بدم، مثلاً هر روز صبح؛ /tasks فهرستشون رو نشون می‌ده."
+        ),
+        "btn.task_confirm": "✅ تأیید",
+        "btn.task_cancel": "❌ لغو",
+        "task.confirmed": "✅ زمان‌بندی شد: {summary} (اجرای بعدی: {when})",
+        "task.cancelled": "لغو شد.",
+        "task.cannot_confirm": "⚠️ نشد شروعش کنم: {reason}",
+        "task.not_yours": "این کار مال تو نیست.",
+        "tasks.list_header": "کارهای تو با این ربات:",
+        "tasks.list_empty": "با این ربات کاری نداری. کافیه بگی چی کار کنم و کی.",
+        "tasks.paused": "متوقف",
+        "tasks.next_run": "اجرای بعدی: {when}",
+        "task.failed": "⚠️ کار «{summary}» اجرا نشد: {error}",
         "bot.private": "این ربات شخصیه؛ فقط صاحبش و کسایی که انتخاب کرده می‌تونن ازش استفاده کنن.",
         "access.pick": (
             "حداکثر {limit} نفر رو انتخاب کن که بتونن از @{username} استفاده کنن. "
@@ -179,16 +201,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "owner.bot_disabled": "⛔ @{username} به دلیل نقض قوانین توسط تیم Obot غیرفعال شد.",
         "owner.bot_enabled": "✅ @{username} دوباره فعال شد.",
         "owner.banned": "⛔ حساب Obot تو به دلیل نقض قوانین مسدود شد.",
-        "tasks.scheduled": "⏰ زمان‌بندی‌شده برای @{username}:",
-        "tasks.next": "اجرای بعدی: {when}",
-        "tasks.rejected": "⚠️ زمان‌بندی نشد:",
-        "tasks.waiting": (
-            "کارهایی که برای تو پیام می‌فرستن، بعد از زدن Start در @{username} شروع می‌شن."
-        ),
-        "tasks.none": "@{username} الان کار زمان‌بندی‌شده‌ای نداره.",
-        "owner.task_waiting": (
-            "@{username} یه کار زمان‌بندی‌شده برات داره، ولی هنوز Start رو توش نزدی."
-        ),
         "owner.task_failed": "⚠️ کار «{summary}» از @{username} اجرا نشد: {error}",
         "forget.admins_only": "فقط ادمین‌های گروه می‌تونن این کار رو بکنن.",
         "buy.menu": (

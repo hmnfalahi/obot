@@ -318,12 +318,12 @@ class MemoryCursor(Base):
 
 
 class TaskStatus(enum.StrEnum):
+    # Shown to its user with a confirm button; does not run yet.
+    DRAFT = "draft"
     ACTIVE = "active"
-    # Destination is the owner's private chat and they have not pressed Start yet.
-    WAITING_START = "waiting_start"
     PAUSED = "paused"
     DONE = "done"  # one-off task that ran
-    CANCELLED = "cancelled"  # replaced by a newer configuration
+    CANCELLED = "cancelled"  # deleted, or a draft that was not confirmed
 
 
 class ScheduleKind(enum.StrEnum):
@@ -332,7 +332,8 @@ class ScheduleKind(enum.StrEnum):
 
 
 class Task(Base):
-    """A scheduled job of a bot: at each run the agent follows `instruction`."""
+    """A person's scheduled job on a bot (SPEC 8.7): at each run the agent follows
+    `instruction`, paid by that person. Others using the same bot never see it."""
 
     __tablename__ = "tasks"
     __table_args__ = (
@@ -342,6 +343,7 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     instruction: Mapped[str] = mapped_column(Text)
     summary: Mapped[str] = mapped_column(String(256))
     # A chain: [{"instruction": str, "bot_id": int | None}, ...] run in order, each step's

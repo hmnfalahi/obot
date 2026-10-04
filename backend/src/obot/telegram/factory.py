@@ -47,8 +47,6 @@ from obot.factory.drafts import (
 from obot.factory.links import create_link
 from obot.i18n import lang_of, t
 from obot.notices import count_today
-from obot.tasks.apply import TaskSync, sync_tasks
-from obot.tasks.schedule import zone
 from obot.telegram.profile import sync_profile
 from obot.telegram.runtime import Runtime
 
@@ -75,9 +73,6 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
     if draft.tools:
         tools = ", ".join(t(lang, f"tool.{tool}") for tool in draft.tools)
         lines += ["", f"🧰 {t(lang, 'card.tools')}: {tools}"]
-    if draft.tasks:
-        lines += ["", f"⏰ {t(lang, 'card.tasks')}:"]
-        lines += [f"• {html.escape(task)}" for task in draft.tasks]
     lines += ["", f"<i>{t(lang, 'card.hint')}</i>"]
     return "\n".join(lines)
 
@@ -103,50 +98,6 @@ def card_keyboard(
     if panel_url:
         rows.append([panel_button(lang, panel_url)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def render_task_sync(lang: str, bot: BotRecord, sync: TaskSync) -> str:
-    if not sync.scheduled and not sync.rejected:
-        return t(lang, "tasks.none", username=bot.username)
-    lines = []
-    if sync.scheduled:
-        lines.append(t(lang, "tasks.scheduled", username=bot.username))
-        for task in sync.scheduled:
-            when = task.next_run_at.astimezone(zone(task.timezone)).strftime("%Y-%m-%d %H:%M")
-            lines.append(f"• {task.summary} ({t(lang, 'tasks.next', when=when)})")
-    if sync.rejected:
-        lines += ["", t(lang, "tasks.rejected")]
-        lines += [f"• {r.summary}: {r.reason}" for r in sync.rejected]
-    if not bot.owner_started and any(
-        task.destination_chat_id == bot.owner.tg_user_id for task in sync.scheduled
-    ):
-        lines += ["", t(lang, "tasks.waiting", username=bot.username)]
-    return "\n".join(lines)
-
-
-async def _sync_and_report(
-    bot: Bot,
-    chat_id: int,
-    lang: str,
-    session: AsyncSession,
-    runtime: Runtime,
-    record: BotRecord,
-    requests: list[str],
-) -> None:
-    try:
-        sync = await sync_tasks(
-            session,
-            runtime.pricing,
-            runtime.models.for_tier("cheap"),
-            record,
-            requests,
-        )
-    except Exception:
-        log.exception("scheduling tasks of bot %s failed", record.id)
-        await bot.send_message(chat_id, t(lang, "factory.error"))
-        return
-    if requests or sync.rejected:
-        await bot.send_message(chat_id, render_task_sync(lang, record, sync))
 
 
 # --- commands --------------------------------------------------------------------------
@@ -426,9 +377,6 @@ async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime)
     await query.answer()
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.answer(t(lang, "factory.saved", username=target.username))
-    await _sync_and_report(
-        query.bot, query.message.chat.id, lang, session, runtime, target, draft.tasks
-    )
 
 
 @router.callback_query(F.data.startswith("draft:cancel:"))
@@ -505,10 +453,6 @@ async def on_managed_bot(
         t(lang, "factory.ready", username=username),
         reply_markup=ReplyKeyboardRemove(),
     )
-    if created_draft is not None and created_draft.tasks:
-        await _sync_and_report(
-            bot, update.user.id, lang, session, runtime, result.bot, created_draft.tasks
-        )
     # A managed bot cannot message its owner until they press Start (see docs/spikes).
     await bot.send_message(
         update.user.id,

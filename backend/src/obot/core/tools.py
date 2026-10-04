@@ -38,8 +38,10 @@ class ToolServices:
     http: httpx.AsyncClient
     meter: ToolMeter
     tavily_api_key: str | None = None
-    # Asks another bot of the same owner (username, question) -> answer; see ask_bot.
+    # Asks another bot of the person being helped (username, question) -> answer; see ask_bot.
     delegate: Callable[[str, str], Awaitable[str]] | None = None
+    # Drafts a scheduled task for the person (request) -> outcome; see schedule_task.
+    schedule: Callable[[str], Awaitable[str]] | None = None
     # The owner's endpoints for call_api, by name; see obot.core.custom_api.
     apis: dict[str, Endpoint] = field(default_factory=dict)
 
@@ -125,7 +127,7 @@ async def read_rss(ctx: RunContext[ToolServices], url: str) -> str:
 
 
 async def ask_bot(ctx: RunContext[ToolServices], username: str, question: str) -> str:
-    """Ask another bot of your owner (by @username) and get its answer.
+    """Ask another bot of the person you are helping (by @username) and get its answer.
 
     Use it when that bot is better suited, e.g. a translator or a specialist. Give
     it a complete, self-contained question: it cannot see this conversation.
@@ -133,6 +135,18 @@ async def ask_bot(ctx: RunContext[ToolServices], username: str, question: str) -
     if ctx.deps.delegate is None:
         return "ERROR: asking other bots is not available here."
     return await ctx.deps.delegate(username.strip().lstrip("@"), question)
+
+
+async def schedule_task(ctx: RunContext[ToolServices], request: str) -> str:
+    """Schedule a recurring or one-off job for the person, e.g. 'every day at 8:00 send me
+    the gold price' or 'tomorrow at 9 remind me to call Sara'.
+
+    Pass their request as one precise sentence with what to do, when, and where to send it
+    if not to them. They confirm it with a button; do not ask them to confirm in words.
+    """
+    if ctx.deps.schedule is None:
+        return "ERROR: scheduling is only available in a private chat with the bot."
+    return await ctx.deps.schedule(request)
 
 
 async def call_api(
@@ -163,25 +177,33 @@ async def call_api(
 
 
 DELEGATION_TOOL = "ask_bots"
+SCHEDULE_TOOL = "schedule_task"
 
 TOOLS = {
     "web_search": Tool(web_search),
     "read_url": Tool(read_url),
     "rss": Tool(read_rss),
     DELEGATION_TOOL: Tool(ask_bot),
+    SCHEDULE_TOOL: Tool(schedule_task),
     API_TOOL: Tool(call_api),
 }
 
 
 def build_tools(
-    enabled: Iterable[str], *, apis: bool = False, delegation: bool = False
+    enabled: Iterable[str],
+    *,
+    apis: bool = False,
+    delegation: bool = False,
+    scheduling: bool = False,
 ) -> list[Tool[ToolServices]]:
     """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped.
 
-    `apis`: the bot has endpoints of its owner, so it gets call_api. `delegation`: there are
-    other bots of the person to consult, so it gets ask_bot (never configured per bot).
+    The rest are never configured per bot: `apis` (the bot has endpoints of its owner) adds
+    call_api, `delegation` (the person has other bots) ask_bot, and `scheduling` (a private
+    chat) schedule_task.
     """
-    names = [t for t in enabled if t != DELEGATION_TOOL]
+    names = [t for t in enabled if t not in (DELEGATION_TOOL, SCHEDULE_TOOL)]
     names += [API_TOOL] if apis else []
     names += [DELEGATION_TOOL] if delegation else []
+    names += [SCHEDULE_TOOL] if scheduling else []
     return [TOOLS[name] for name in dict.fromkeys(names) if name in TOOLS]

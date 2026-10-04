@@ -6,19 +6,22 @@ import pytest
 from pydantic_ai.models.test import TestModel
 
 from obot.billing.plans import ModelPrice, Pricing
-from obot.bots.service import ManagedBotInfo, default_timezone, register_managed_bot
-from obot.chat.membership import upsert_membership
+from obot.bots.service import (
+    ManagedBotInfo,
+    default_timezone,
+    get_or_create_user,
+    register_managed_bot,
+)
 from obot.db.models import BotStatus, Task, TaskStatus
-from obot.tasks.apply import sync_tasks
+from obot.tasks.apply import PlanningFailed, draft_task
 from obot.tasks.planner import KnownChat, PlannedTask
 from obot.tasks.schedule import InvalidSchedule, Schedule, next_run, validate
 from obot.tasks.service import (
     build_tasks,
     claim_due,
-    live_tasks,
+    confirm_draft,
     record_run,
-    replace_bot_tasks,
-    resume_waiting,
+    user_tasks,
 )
 from obot.telegram.task_runner import task_prompt
 
@@ -26,6 +29,7 @@ PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
 TEHRAN = ZoneInfo("Asia/Tehran")
 NOW = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)  # 15:30 in Tehran
 OWNER = 1001
+ALI = 5005
 
 
 @pytest.fixture
@@ -35,14 +39,13 @@ def pricing() -> Pricing:
     return pricing
 
 
-async def make_bot(session, cipher, started: bool = True):
+async def make_bot(session, cipher):
     async def fetch_token(_: int) -> str:
         return "9:token"
 
     result = await register_managed_bot(
         session, cipher, fetch_token, OWNER, ManagedBotInfo(9, "t_bot", "T"), 10
     )
-    result.bot.owner_started = started
     await session.flush()
     return result.bot
 
@@ -53,7 +56,7 @@ def planned(**overrides) -> PlannedTask:
         "schedule": "cron",
         "cron": "0 8 * * *",
         "timezone": "Asia/Tehran",
-        "destination": "owner",
+        "destination": "me",
         "summary": "every day at 8",
     }
     return PlannedTask(**(values | overrides))
@@ -109,31 +112,34 @@ def test_persian_speakers_default_to_tehran() -> None:
 # --- building tasks ----------------------------------------------------------------------
 
 
-async def test_build_tasks_destinations_and_waiting_start(session, cipher, pricing) -> None:
-    bot = await make_bot(session, cipher, started=False)
-    chats = [KnownChat(-100, "Group", "supergroup")]
-    plan = pricing.plan("free")
+async def test_build_tasks_drafts_for_the_user(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    ali = await get_or_create_user(session, ALI)
+    chats = [KnownChat(-100, "Group", "supergroup")]  # where Ali is an admin
 
     tasks, rejected = build_tasks(
         [planned(), planned(destination="-100"), planned(destination="-555")],
         bot,
+        ali,
         chats,
-        plan,
+        pricing.plan("free"),
         already_live=0,
         now=NOW,
     )
 
-    assert [t.destination_chat_id for t in tasks] == [OWNER, -100]
-    assert tasks[0].status == TaskStatus.WAITING_START
-    assert tasks[1].status == TaskStatus.ACTIVE
-    assert [r.reason for r in rejected] == ["the bot is not a member of that chat"]
+    assert [t.destination_chat_id for t in tasks] == [ALI, -100]
+    assert {t.user_id for t in tasks} == {ali.id}
+    assert {t.status for t in tasks} == {TaskStatus.DRAFT}
+    assert [r.reason for r in rejected] == [
+        "you can only post to groups and channels where you are an admin"
+    ]
 
 
 async def test_build_tasks_enforces_plan_limit(session, cipher, pricing) -> None:
     bot = await make_bot(session, cipher)
 
     tasks, rejected = build_tasks(
-        [planned(), planned()], bot, [], pricing.plan("free"), already_live=2, now=NOW
+        [planned(), planned()], bot, bot.owner, [], pricing.plan("free"), already_live=2, now=NOW
     )
 
     assert len(tasks) == 1
@@ -146,6 +152,7 @@ async def test_build_once_task_uses_local_time(session, cipher, pricing) -> None
     [task], _ = build_tasks(
         [planned(schedule="once", cron=None, run_at="2026-10-03T18:00")],
         bot,
+        bot.owner,
         [],
         pricing.plan("free"),
         0,
@@ -158,22 +165,37 @@ async def test_build_once_task_uses_local_time(session, cipher, pricing) -> None
 # --- persistence and execution bookkeeping -------------------------------------------------
 
 
-async def add_task(session, bot, **overrides) -> Task:
-    [task], _ = build_tasks(
-        [planned(**overrides)], bot, [], Pricing.load(PLANS_FILE).plan("free"), 0, NOW
-    )
-    await replace_bot_tasks(session, bot, [task])
+async def add_task(session, bot, user=None, **overrides) -> Task:
+    user = user or bot.owner
+    plan = Pricing.load(PLANS_FILE).plan("free")
+    [task], _ = build_tasks([planned(**overrides)], bot, user, [], plan, 0, NOW)
+    session.add(task)
+    await session.flush()
+    assert await confirm_draft(session, task, user, plan, NOW) is None
     return task
 
 
-async def test_replacing_cancels_previous_tasks(session, cipher) -> None:
+async def test_tasks_are_each_users_own(session, cipher) -> None:
     bot = await make_bot(session, cipher)
-    old = await add_task(session, bot)
+    ali = await get_or_create_user(session, ALI)
+    mine = await add_task(session, bot)
+    alis = await add_task(session, bot, ali)
 
-    new = await add_task(session, bot, cron="0 9 * * *")
+    assert [t.id for t in await user_tasks(session, bot.owner)] == [mine.id]
+    assert [t.id for t in await user_tasks(session, ali, bot)] == [alis.id]
 
-    assert old.status == TaskStatus.CANCELLED and old.next_run_at is None
-    assert [t.id for t in await live_tasks(session, bot)] == [new.id]
+
+async def test_confirming_respects_the_plan(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    for hour in (7, 8, 9):
+        await add_task(session, bot, cron=f"0 {hour} * * *")
+    [extra], _ = build_tasks([planned()], bot, bot.owner, [], pricing.plan("free"), 0, NOW)
+    session.add(extra)
+    await session.flush()
+
+    problem = await confirm_draft(session, extra, bot.owner, pricing.plan("free"), NOW)
+
+    assert "allows 3" in problem and extra.status == TaskStatus.DRAFT
 
 
 async def test_claim_due_advances_before_running(session, cipher) -> None:
@@ -189,6 +211,15 @@ async def test_claim_due_advances_before_running(session, cipher) -> None:
     assert task.next_run_at == due_at + timedelta(days=1)
 
 
+async def test_drafts_never_run(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    [draft], _ = build_tasks([planned()], bot, bot.owner, [], pricing.plan("free"), 0, NOW)
+    session.add(draft)
+    await session.flush()
+
+    assert await claim_due(session, draft.next_run_at, 10) == []
+
+
 async def test_claimed_once_task_is_done(session, cipher) -> None:
     bot = await make_bot(session, cipher)
     task = await add_task(session, bot, schedule="once", cron=None, run_at="2026-10-03T18:00")
@@ -198,25 +229,18 @@ async def test_claimed_once_task_is_done(session, cipher) -> None:
     assert task.status == TaskStatus.DONE and task.next_run_at is None
 
 
-async def test_tasks_of_disabled_bots_are_not_claimed(session, cipher) -> None:
+async def test_tasks_of_disabled_bots_or_users_are_not_claimed(session, cipher) -> None:
     bot = await make_bot(session, cipher)
-    task = await add_task(session, bot)
-    bot.status = BotStatus.DISABLED
+    ali = await get_or_create_user(session, ALI)
+    task = await add_task(session, bot, ali)
+    ali.is_disabled = True
     await session.flush()
-
     assert await claim_due(session, task.next_run_at, 10) == []
 
-
-async def test_resume_waiting_after_start(session, cipher) -> None:
-    bot = await make_bot(session, cipher, started=False)
-    task = await add_task(session, bot)
-    assert task.status == TaskStatus.WAITING_START
-    later = task.next_run_at + timedelta(hours=1)
-
-    assert await resume_waiting(session, bot, later) == 1
-
-    assert task.status == TaskStatus.ACTIVE
-    assert task.next_run_at > later
+    ali.is_disabled = False
+    bot.status = BotStatus.DISABLED
+    await session.flush()
+    assert await claim_due(session, task.next_run_at, 10) == []
 
 
 async def test_record_run(session, cipher) -> None:
@@ -229,37 +253,42 @@ async def test_record_run(session, cipher) -> None:
     assert ok.ok and not failed.ok and failed.error == "boom"
 
 
-# --- planner + sync -------------------------------------------------------------------------
+# --- planning a request ---------------------------------------------------------------------
 
 
-async def test_sync_tasks_plans_validates_and_replaces(session, cipher, pricing) -> None:
+async def test_draft_task_plans_for_the_user_and_replaces_older_drafts(
+    session, cipher, pricing
+) -> None:
     bot = await make_bot(session, cipher)
-    await upsert_membership(
-        session, bot.id, -100, chat_type="supergroup", title="G", is_member=True, is_admin=True
-    )
-    model = TestModel(
-        custom_output_args={
-            "tasks": [
-                planned().model_dump(),
-                planned(cron="*/10 * * * *", summary="every 10 min").model_dump(),
-            ]
-        }
-    )
+    ali = await get_or_create_user(session, ALI)
+    model = TestModel(custom_output_args={"tasks": [planned().model_dump()]})
 
-    sync = await sync_tasks(session, pricing, model, bot, ["dollar at 8", "spam"])
+    first = await draft_task(session, pricing, model, bot, ali, "dollar at 8", [])
+    second = await draft_task(session, pricing, model, bot, ali, "dollar at 8, again", [])
 
-    assert [t.summary for t in sync.scheduled] == ["every day at 8"]
-    assert [r.summary for r in sync.rejected] == ["every 10 min"]
-    assert len(await live_tasks(session, bot)) == 1
+    assert first.scheduled[0].status == TaskStatus.CANCELLED
+    assert second.scheduled[0].status == TaskStatus.DRAFT
+    assert second.scheduled[0].user_id == ali.id
+    assert await user_tasks(session, ali) == []  # drafts are not live yet
 
 
-async def test_sync_with_no_requests_clears_tasks(session, cipher, pricing) -> None:
+async def test_draft_task_reports_rejections(session, cipher, pricing) -> None:
     bot = await make_bot(session, cipher)
-    await add_task(session, bot)
+    spam = planned(cron="*/10 * * * *", summary="every 10 min").model_dump()
 
-    await sync_tasks(session, pricing, TestModel(), bot, [])
+    sync = await draft_task(
+        session, pricing, TestModel(custom_output_args={"tasks": [spam]}), bot, bot.owner, "x", []
+    )
 
-    assert await live_tasks(session, bot) == []
+    assert sync.scheduled == [] and [r.summary for r in sync.rejected] == ["every 10 min"]
+
+
+async def test_planner_losing_the_request_fails(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    empty_plan = TestModel(custom_output_args={"tasks": []})
+
+    with pytest.raises(PlanningFailed):
+        await draft_task(session, pricing, empty_plan, bot, bot.owner, "dollar at 8", [])
 
 
 def test_task_prompt_asks_for_bot_language() -> None:
@@ -267,16 +296,3 @@ def test_task_prompt_asks_for_bot_language() -> None:
 
     assert "'fa'" in task_prompt(task, "fa")
     assert "language" not in task_prompt(task, None)
-
-
-async def test_planner_losing_requests_keeps_existing_tasks(session, cipher, pricing) -> None:
-    from obot.tasks.apply import PlanningFailed
-
-    bot = await make_bot(session, cipher)
-    existing = await add_task(session, bot)
-    empty_plan = TestModel(custom_output_args={"tasks": []})
-
-    with pytest.raises(PlanningFailed):
-        await sync_tasks(session, pricing, empty_plan, bot, ["dollar at 8", "oil at 9"])
-
-    assert [t.id for t in await live_tasks(session, bot)] == [existing.id]

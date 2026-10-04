@@ -26,7 +26,7 @@ from obot.db.session import create_engine, create_sessionmaker
 from obot.jobs import run_every
 from obot.memory.jobs import extract_pending, purge_history
 from obot.observability import setup_tracing
-from obot.telegram import bots, factory, moderation, payments
+from obot.telegram import bots, factory, moderation, payments, scheduling
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.polling import PollingManager
 from obot.telegram.runtime import Runtime
@@ -129,6 +129,8 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
 
     runtime.bots_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
     runtime.bots_dispatcher.update.middleware(ManagedBotMiddleware())
+    # Before bots: /tasks must not reach the catch-all chat handler.
+    runtime.bots_dispatcher.include_router(scheduling.router)
     runtime.bots_dispatcher.include_router(bots.router)
 
     factory_dispatcher = Dispatcher()

@@ -2,16 +2,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from pydantic_ai.models.test import TestModel
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from obot.api.auth import InvalidInitData, sign_init_data, validate_init_data
 from obot.billing.usage import record_llm_usage
-from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
 from obot.db.models import Bot, DraftState, FactoryDraft, Task, TaskStatus
 from obot.tasks.planner import PlannedTask
-from obot.tasks.service import build_tasks, replace_bot_tasks
+from obot.tasks.service import build_tasks, confirm_draft
 from tests.conftest import API_FACTORY_TOKEN as TOKEN
 
 ALICE = {"id": 1001, "first_name": "Alice", "language_code": "fa"}
@@ -42,21 +41,24 @@ async def make_bot(api, tg_user: dict, tg_bot_id: int):
         return result.bot.id
 
 
-async def make_task(api, bot_id: int) -> int:
+async def make_task(api, bot_id: int, tg_user: dict = ALICE) -> int:
+    """A confirmed task of `tg_user` on the bot."""
     async with api.state.sessionmaker() as session:
         bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        user = await get_or_create_user(session, tg_user["id"])
+        plan = api.state.pricing.plan("free")
         planned = PlannedTask(
             instruction="Send the price.",
             schedule="cron",
             cron="0 8 * * *",
             timezone="Asia/Tehran",
-            destination="owner",
+            destination="me",
             summary="every day at 8",
         )
-        [task], _ = build_tasks(
-            [planned], bot, [], api.state.pricing.plan("free"), 0, datetime.now(UTC)
-        )
-        await replace_bot_tasks(session, bot, [task])
+        [task], _ = build_tasks([planned], bot, user, [], plan, 0, datetime.now(UTC))
+        session.add(task)
+        await session.flush()
+        await confirm_draft(session, task, user, plan, datetime.now(UTC))
         await session.commit()
         return task.id
 
@@ -201,36 +203,25 @@ async def test_pause_resume_and_delete_task(api) -> None:
     assert resumed.json()["next_run_at"] is not None
     assert forbidden.status_code == 404
     assert deleted.status_code == 204
-    detail = (await api.get(f"/api/bots/{bot_id}", headers=auth(ALICE))).json()
-    assert detail["tasks"] == []
+    assert (await api.get("/api/tasks", headers=auth(ALICE))).json() == []
 
 
-async def test_add_task_by_text(api) -> None:
+async def test_my_tasks_are_mine_on_any_bot(api) -> None:
     bot_id = await make_bot(api, ALICE, 11)
-    api.state.models.model = TestModel(
-        custom_output_args={
-            "tasks": [
-                {
-                    "instruction": "Send the oil price.",
-                    "schedule": "cron",
-                    "cron": "0 9 * * *",
-                    "timezone": "Asia/Tehran",
-                    "destination": "owner",
-                    "summary": "every day at 9",
-                }
-            ]
-        }
+    alice_task = await make_task(api, bot_id)
+    bob_task = await make_task(api, bot_id, BOB)  # Bob uses Alice's bot
+
+    alice = (await api.get("/api/tasks", headers=auth(ALICE))).json()
+    bob = (await api.get("/api/tasks", headers=auth(BOB))).json()
+    owner_pausing_bobs = await api.patch(
+        f"/api/tasks/{bob_task}", json={"paused": True}, headers=auth(ALICE)
     )
 
-    response = await api.post(
-        f"/api/bots/{bot_id}/tasks", json={"request": "oil price daily at 9"}, headers=auth(ALICE)
-    )
-
-    body = response.json()
-    assert [t["summary"] for t in body["scheduled"]] == ["every day at 9"]
-    assert body["scheduled"][0]["to_owner"] is True
-    detail = (await api.get(f"/api/bots/{bot_id}", headers=auth(ALICE))).json()
-    assert len(detail["tasks"]) == 1
+    assert [t["id"] for t in alice] == [alice_task]
+    assert [(t["id"], t["bot_username"], t["to_me"]) for t in bob] == [
+        (bob_task, "bot11_bot", True)
+    ]
+    assert owner_pausing_bobs.status_code == 404
 
 
 async def test_usage_by_day(api) -> None:
