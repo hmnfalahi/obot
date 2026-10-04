@@ -26,7 +26,7 @@ from obot.db.session import create_engine, create_sessionmaker
 from obot.jobs import run_every
 from obot.memory.jobs import extract_pending, purge_history
 from obot.observability import setup_tracing
-from obot.telegram import bots, factory, moderation
+from obot.telegram import bots, factory, moderation, payments
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.polling import PollingManager
 from obot.telegram.runtime import Runtime
@@ -134,6 +134,7 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
     factory_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
     # Moderation first: /report and admin commands must not reach the designer.
     factory_dispatcher.include_router(moderation.router)
+    factory_dispatcher.include_router(payments.router)
     factory_dispatcher.include_router(factory.router)
 
     me = await get_me_with_retry(factory_bot)

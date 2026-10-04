@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
+from aiogram import Bot as TelegramBot
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import Date, case, cast, func, select
 
@@ -11,10 +12,13 @@ from obot.api.schemas import (
     BotSummary,
     BotUpdate,
     ChatOut,
+    InvoiceIn,
+    InvoiceOut,
     MeOut,
     MeUpdate,
     NewBotIn,
     NewBotOut,
+    PackageOut,
     Quota,
     RejectedOut,
     TaskAddOut,
@@ -33,6 +37,7 @@ from obot.i18n import lang_of
 from obot.tasks.apply import add_tasks
 from obot.tasks.schedule import InvalidSchedule, zone
 from obot.tasks.service import cancel_task, live_tasks, set_paused
+from obot.telegram.payments import invoice_args
 from obot.telegram.profile import sync_profile
 
 router = APIRouter(prefix="/api")
@@ -56,6 +61,7 @@ async def _me(session: Session, state: State, user: User) -> MeOut:
     plan = state.pricing.plan(user.plan)
     return MeOut(
         tg_user_id=user.tg_user_id,
+        model_tiers=plan.model_tiers,
         language=lang_of(user.language),
         timezone=user.timezone,
         plan=user.plan,
@@ -172,6 +178,10 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
     bot.persona = persona
     if body.tools is not None:
         bot.tools = [t.value for t in body.tools]
+    if body.model_tier is not None:
+        if body.model_tier not in state.pricing.plan(bot.owner.plan).model_tiers:
+            raise HTTPException(403, "this model needs the paid plan")
+        bot.model_tier = body.model_tier
     if body.clear_daily_credit_cap:
         bot.daily_credit_cap = None
     elif body.daily_credit_cap is not None:
@@ -233,6 +243,28 @@ async def new_bot(body: NewBotIn, user: CurrentUser, session: Session, state: St
         create_link=create_link(state.factory_username, row.suggested_username, body.name),
         suggested_username=row.suggested_username,
     )
+
+
+# --- billing ------------------------------------------------------------------------------
+
+
+@router.get("/billing/packages")
+async def packages(state: State, _: CurrentUser) -> list[PackageOut]:
+    return [PackageOut(**p.model_dump()) for p in state.pricing.star_packages]
+
+
+@router.post("/billing/invoice")
+async def create_invoice(body: InvoiceIn, user: CurrentUser, state: State) -> InvoiceOut:
+    """Invoice link for Telegram.WebApp.openInvoice; payment lands in the factory bot."""
+    package = state.pricing.package(body.package_id)
+    if package is None:
+        raise HTTPException(404, "unknown package")
+    bot = TelegramBot(state.factory_token)
+    try:
+        link = await bot.create_invoice_link(**invoice_args(lang_of(user.language), package))
+    finally:
+        await bot.session.close()
+    return InvoiceOut(link=link)
 
 
 # --- tasks ------------------------------------------------------------------------------------

@@ -28,7 +28,7 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
           </button>
         </div>
       )}
-      <ProfileForm bot={data} onSaved={bot.set} />
+      <ProfileForm bot={data} me={me} onSaved={bot.set} />
       <Tasks bot={data} me={me} onChange={bot.reload} />
       <Chats bot={data} />
       <Usage id={id} />
@@ -36,7 +36,7 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
   )
 }
 
-function ProfileForm({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail) => void }) {
+function ProfileForm({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: BotDetail) => void }) {
   const { t } = useI18n()
   const [form, setForm] = useState({
     display_name: bot.display_name,
@@ -44,6 +44,7 @@ function ProfileForm({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail)
     system_prompt: bot.system_prompt,
     language: bot.language,
     tools: bot.tools,
+    model_tier: bot.model_tier as 'cheap' | 'strong',
     cap: bot.daily_credit_cap?.toString() ?? '',
   })
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | string>('idle')
@@ -64,6 +65,7 @@ function ProfileForm({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail)
         system_prompt: form.system_prompt,
         language: form.language,
         tools: form.tools,
+        ...(me.model_tiers.includes(form.model_tier) ? { model_tier: form.model_tier } : {}),
         ...(cap ? { daily_credit_cap: Number(cap) } : { clear_daily_credit_cap: true }),
       })
       onSaved(saved)
@@ -95,6 +97,17 @@ function ProfileForm({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail)
           <input type="checkbox" checked={form.tools.includes(tool)} onChange={() => toggleTool(tool)} />
         </label>
       ))}
+      <label>{t('model')}</label>
+      <select
+        value={form.model_tier}
+        onChange={(e) => setForm({ ...form, model_tier: e.target.value as 'cheap' | 'strong' })}
+      >
+        {(['cheap', 'strong'] as const).map((tier) => (
+          <option key={tier} value={tier} disabled={!me.model_tiers.includes(tier)}>
+            {t(`model.${tier}`)}
+          </option>
+        ))}
+      </select>
       <label>{t('dailyCap')}</label>
       <input inputMode="numeric" value={form.cap} onChange={(e) => setForm({ ...form, cap: e.target.value.replace(/\D/g, '') })} />
       <button className="btn block" disabled={status === 'saving'} onClick={save}>

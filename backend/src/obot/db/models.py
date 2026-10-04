@@ -339,3 +339,19 @@ class Report(Base):
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     resolved_at: Mapped[datetime | None]
+
+
+class Payment(Base):
+    """A credit purchase paid with Telegram Stars."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    package_id: Mapped[str] = mapped_column(String(32))
+    stars: Mapped[int]
+    credits: Mapped[int] = mapped_column(BigInteger)
+    # Telegram's id of the charge; unique so a redelivered update cannot credit twice.
+    telegram_charge_id: Mapped[str] = mapped_column(String(128), unique=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    refunded_at: Mapped[datetime | None]

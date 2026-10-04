@@ -20,7 +20,8 @@ async def redis():
 
 
 async def test_first_today_only_once_per_local_day(redis) -> None:
-    now = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
+    # Noon tomorrow: keys expire at the end of that day, which must still be in the future.
+    now = (datetime.now(UTC) + timedelta(days=1)).replace(hour=12, minute=0)
 
     assert await first_today(redis, "k", now, "UTC")
     assert not await first_today(redis, "k", now + timedelta(hours=1), "UTC")

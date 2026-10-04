@@ -22,16 +22,26 @@ class Plan(BaseModel):
     knowledge_bytes: int
 
 
+class StarPackage(BaseModel):
+    id: str
+    stars: int
+    credits: int
+
+
 class Pricing(BaseModel):
     usd_per_credit: Decimal
     markup: Decimal
     models: dict[str, ModelPrice]
     tools: dict[str, Decimal]
+    star_packages: list[StarPackage] = []
     plans: dict[str, Plan]
 
     @classmethod
     def load(cls, path: Path) -> "Pricing":
         return cls.model_validate(yaml.safe_load(path.read_text()))
+
+    def package(self, package_id: str) -> StarPackage | None:
+        return next((p for p in self.star_packages if p.id == package_id), None)
 
     def plan(self, name: str) -> Plan:
         return self.plans.get(name) or self.plans["free"]

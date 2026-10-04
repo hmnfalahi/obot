@@ -35,6 +35,8 @@ def ordering_key(update: Update) -> Hashable:
         return ("chat", update.message.chat.id)
     if update.my_chat_member:
         return ("chat", update.my_chat_member.chat.id)
+    if update.pre_checkout_query:
+        return ("user", update.pre_checkout_query.from_user.id)
     if update.callback_query:
         return ("user", update.callback_query.from_user.id)
     if update.managed_bot:

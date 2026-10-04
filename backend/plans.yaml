@@ -19,6 +19,13 @@ tools:
   fetch: 0        # our own bandwidth; recorded for statistics
   memory: 0       # priced per model call via `models`
 
+# Credit packages sold for Telegram Stars (XTR). One Star earns the developer about
+# 0.013 USD, i.e. about 130 credits; larger packages include a bonus.
+star_packages:
+  - {id: s50, stars: 50, credits: 6500}
+  - {id: s250, stars: 250, credits: 35000}
+  - {id: s1000, stars: 1000, credits: 150000}
+
 plans:
   free:
     max_bots: 2

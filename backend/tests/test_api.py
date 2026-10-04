@@ -1,25 +1,19 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import httpx
 import pytest
 from pydantic_ai.models.test import TestModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import joinedload
 
-from obot.api import routes
-from obot.api.app import create_app
 from obot.api.auth import InvalidInitData, sign_init_data, validate_init_data
-from obot.api.deps import ApiState
-from obot.billing.plans import ModelPrice, Pricing
 from obot.billing.usage import record_llm_usage
 from obot.bots.service import ManagedBotInfo, register_managed_bot
 from obot.db.models import Bot, DraftState, FactoryDraft, Task, TaskStatus
 from obot.tasks.planner import PlannedTask
 from obot.tasks.service import build_tasks, replace_bot_tasks
+from tests.conftest import API_FACTORY_TOKEN as TOKEN
 
-TOKEN = "123:factory-secret"
 ALICE = {"id": 1001, "first_name": "Alice", "language_code": "fa"}
 BOB = {"id": 2002, "first_name": "Bob", "language_code": "en"}
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
@@ -27,38 +21,6 @@ PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
 
 def auth(user: dict) -> dict[str, str]:
     return {"Authorization": f"tma {sign_init_data(user, TOKEN)}"}
-
-
-class FakeModels:
-    def __init__(self) -> None:
-        self.model = TestModel()
-
-    def for_tier(self, tier: str):
-        return self.model
-
-
-@pytest.fixture
-async def api(session, cipher, monkeypatch):
-    async def no_profile_sync(*args, **kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(routes, "sync_profile", no_profile_sync)
-    pricing = Pricing.load(PLANS_FILE)
-    pricing.models["test"] = ModelPrice(input_per_mtok=1, output_per_mtok=1)
-    state = ApiState(
-        sessionmaker=async_sessionmaker(session.bind, expire_on_commit=False),
-        cipher=cipher,
-        pricing=pricing,
-        models=FakeModels(),
-        factory_token=TOKEN,
-        factory_username="obotfactorybot",
-    )
-    app = create_app(state)
-    app.state.api = state
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        client.state = state
-        yield client
 
 
 async def make_bot(api, tg_user: dict, tg_bot_id: int):

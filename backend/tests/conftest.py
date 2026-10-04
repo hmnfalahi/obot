@@ -1,11 +1,18 @@
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
+import httpx
 import pytest
+from pydantic_ai.models.test import TestModel
 from sqlalchemy import make_url, text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from obot.api import routes
+from obot.api.app import create_app
+from obot.api.deps import ApiState
+from obot.billing.plans import ModelPrice, Pricing
 from obot.config import get_settings
 from obot.crypto import TokenCipher
 from obot.db.models import Base
@@ -46,3 +53,41 @@ async def session() -> AsyncIterator[AsyncSession]:
 @pytest.fixture
 def cipher() -> TokenCipher:
     return TokenCipher.from_b64(TokenCipher.generate_key_b64())
+
+
+# --- mini app API -----------------------------------------------------------------------------
+
+API_FACTORY_TOKEN = "123:factory-secret"
+PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
+
+
+class FakeModels:
+    def __init__(self) -> None:
+        self.model = TestModel()
+
+    def for_tier(self, tier: str):
+        return self.model
+
+
+@pytest.fixture
+async def api(session, cipher, monkeypatch):
+    async def no_profile_sync(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(routes, "sync_profile", no_profile_sync)
+    pricing = Pricing.load(PLANS_FILE)
+    pricing.models["test"] = ModelPrice(input_per_mtok=1, output_per_mtok=1)
+    state = ApiState(
+        sessionmaker=async_sessionmaker(session.bind, expire_on_commit=False),
+        cipher=cipher,
+        pricing=pricing,
+        models=FakeModels(),
+        factory_token=API_FACTORY_TOKEN,
+        factory_username="obotfactorybot",
+    )
+    app = create_app(state)
+    app.state.api = state
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        client.state = state
+        yield client

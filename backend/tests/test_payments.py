@@ -1,0 +1,128 @@
+from pathlib import Path
+
+import pytest
+from sqlalchemy import func, select
+
+from obot.billing.payments import (
+    PAID_PLAN,
+    PaymentError,
+    find_payment,
+    invoice_payload,
+    package_for_payload,
+    record_purchase,
+    record_refund,
+)
+from obot.billing.plans import Pricing
+from obot.bots.service import get_or_create_user
+from obot.db.models import Payment
+from tests.test_api import ALICE, BOB, auth, make_bot
+
+PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
+
+
+@pytest.fixture
+def pricing() -> Pricing:
+    return Pricing.load(PLANS_FILE)
+
+
+def test_shipped_packages(pricing) -> None:
+    assert [(p.id, p.stars, p.credits) for p in pricing.star_packages] == [
+        ("s50", 50, 6500),
+        ("s250", 250, 35000),
+        ("s1000", 1000, 150000),
+    ]
+
+
+def test_payload_validation(pricing) -> None:
+    package = pricing.package("s250")
+    payload = invoice_payload(package)
+
+    assert package_for_payload(pricing, payload, "XTR", 250) == package
+    with pytest.raises(PaymentError, match="price"):
+        package_for_payload(pricing, payload, "XTR", 1)
+    with pytest.raises(PaymentError, match="unknown"):
+        package_for_payload(pricing, payload, "USD", 250)
+    with pytest.raises(PaymentError, match="no longer sold"):
+        package_for_payload(pricing, "credits:gone", "XTR", 250)
+
+
+async def test_purchase_credits_once_and_switches_plan(session, pricing) -> None:
+    user = await get_or_create_user(session, 1001)
+    package = pricing.package("s50")
+
+    assert await record_purchase(session, user, package, "charge-1")
+    # Telegram may deliver the same successful_payment again.
+    assert not await record_purchase(session, user, package, "charge-1")
+
+    assert user.credit_balance == 6500
+    assert user.plan == PAID_PLAN
+    assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+
+
+async def test_refund_takes_credits_back(session, pricing) -> None:
+    user = await get_or_create_user(session, 1001)
+    await record_purchase(session, user, pricing.package("s50"), "charge-1")
+    user.credit_balance -= 6000  # spent most of it
+    await session.flush()
+
+    await record_refund(session, await find_payment(session, "charge-1"))
+
+    assert user.credit_balance == 500 - 6500
+    assert (await find_payment(session, "charge-1")).refunded_at is not None
+
+
+# --- API ------------------------------------------------------------------------------------
+
+
+async def test_api_lists_packages(api) -> None:
+    response = await api.get("/api/billing/packages", headers=auth(ALICE))
+
+    assert [p["id"] for p in response.json()] == ["s50", "s250", "s1000"]
+
+
+async def test_strong_model_needs_paid_plan(api) -> None:
+    bot_id = await make_bot(api, ALICE, 11)
+
+    free = await api.patch(
+        f"/api/bots/{bot_id}", json={"model_tier": "strong"}, headers=auth(ALICE)
+    )
+    assert free.status_code == 403
+
+    async with api.state.sessionmaker() as session:
+        user = await get_or_create_user(session, ALICE["id"])
+        user.plan = PAID_PLAN
+        await session.commit()
+    paid = await api.patch(
+        f"/api/bots/{bot_id}", json={"model_tier": "strong"}, headers=auth(ALICE)
+    )
+    assert paid.json()["model_tier"] == "strong"
+    me = await api.get("/api/me", headers=auth(ALICE))
+    assert me.json()["model_tiers"] == ["cheap", "strong"]
+
+
+async def test_invoice_link_for_package(api, monkeypatch) -> None:
+    from obot.api import routes
+
+    created = {}
+
+    class FakeBot:
+        def __init__(self, token: str) -> None:
+            self.session = self
+
+        async def create_invoice_link(self, **kwargs) -> str:
+            created.update(kwargs)
+            return "https://t.me/$invoice"
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(routes, "TelegramBot", FakeBot)
+
+    ok = await api.post("/api/billing/invoice", json={"package_id": "s250"}, headers=auth(BOB))
+    missing = await api.post("/api/billing/invoice", json={"package_id": "x"}, headers=auth(BOB))
+
+    assert ok.json() == {"link": "https://t.me/$invoice"}
+    assert created["currency"] == "XTR"
+    assert created["prices"][0].amount == 250
+    assert created["payload"] == "credits:s250"
+    assert missing.status_code == 404
