@@ -8,9 +8,11 @@ from datetime import UTC, datetime
 from aiogram import Bot
 from sqlalchemy.orm import joinedload
 
-from obot.billing.usage import UsageMeter, allowed_tier, check_llm_quota, record_llm_usage
+from obot.billing.usage import UsageMeter, check_llm_quota, record_llm_usage
+from obot.bots.byok import reply_model, uses_byok
 from obot.chat.history import ChatScope, record_message
 from obot.core.agent import BotProfile, generate_reply
+from obot.core.byok import failure_of
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import WATCHER_TRIGGERS, SenderKind, Task, TriggerKind
 from obot.db.models import Bot as BotRecord
@@ -118,7 +120,10 @@ async def execute_task(
             )
             return
 
-        quota = await check_llm_quota(session, runtime.pricing, owner, bot_record, started)
+        byok = uses_byok(bot_record)
+        quota = await check_llm_quota(
+            session, runtime.pricing, owner, bot_record, started, byok=byok
+        )
         if not quota.allowed:
             await record_run(session, task, started, error=f"quota: {quota.reason}")
             await session.commit()
@@ -145,7 +150,7 @@ async def execute_task(
                 memories = await recall_facts(
                     session, runtime.pricing, bot_record, scope, task.instruction, runtime.embedder
                 )
-            tier = allowed_tier(runtime.pricing, owner, bot_record.model_tier)
+            chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record)
             services = ToolServices(
                 http=runtime.http,
                 meter=UsageMeter(session, runtime.pricing, owner, bot_record, started),
@@ -156,7 +161,7 @@ async def execute_task(
                 services.delegate = Delegator(runtime, bot_record)
                 note = delegation_note(await owner_peers(session, bot_record))
             reply = await generate_reply(
-                runtime.models.for_tier(tier),
+                chosen.model,
                 BotProfile(name=bot_record.display_name, persona=bot_record.persona),
                 [],
                 prompt,
@@ -173,6 +178,7 @@ async def execute_task(
                 reply.model_name,
                 reply.input_tokens,
                 reply.output_tokens,
+                byok=chosen.byok,
             )
             if event is not None and is_skip(reply.text):
                 await record_run(session, task, started)
@@ -200,6 +206,7 @@ async def execute_task(
             task = await session.get(Task, task_id)
             await record_run(session, task, started, error=f"{type(e).__name__}: {e}"[:1000])
             await session.commit()
+            failure = failure_of(e) if byok else None
             await _notify_owner(
                 runtime,
                 contact,
@@ -208,7 +215,9 @@ async def execute_task(
                 "owner.task_failed",
                 username=username,
                 summary=summary,
-                error=type(e).__name__,
+                error=t(lang_of(contact.language), f"byok.reason.{failure}")
+                if failure is not None
+                else type(e).__name__,
             )
         finally:
             await bot.session.close()

@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from obot.core.byok import MODEL_NAME, Provider
 from obot.core.rules import MAX_RULES, ReplyRule
 from obot.factory.designer import ToolName
 
@@ -64,11 +65,25 @@ class TaskOut(BaseModel):
     last_error: str | None
 
 
+class ByokOut(BaseModel):
+    provider: Provider
+    model: str
+    key_hint: str
+
+
+class ByokIn(BaseModel):
+    provider: Provider
+    model: str = Field(pattern=f"^{MODEL_NAME.pattern}$")
+    # Omitted: keep the stored key (same provider only), e.g. to switch models.
+    api_key: str | None = Field(default=None, min_length=8, max_length=512)
+
+
 class BotDetail(BotSummary):
     reply_rules: list[ReplyRule]
     system_prompt: str
     language: str
     model_tier: str
+    byok: ByokOut | None
     daily_credit_cap: int | None
     chats: list[ChatOut]
     tasks: list[TaskOut]

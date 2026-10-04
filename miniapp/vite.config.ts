@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     allowedHosts: ['.trycloudflare.com'],
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': process.env.OBOT_API_URL ?? 'http://localhost:8000',
     },
   },
 })

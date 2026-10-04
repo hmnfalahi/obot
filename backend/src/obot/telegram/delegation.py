@@ -12,10 +12,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from obot.billing.usage import UsageMeter, allowed_tier, check_llm_quota, record_llm_usage
+from obot.billing.usage import UsageMeter, check_llm_quota, record_llm_usage
+from obot.bots.byok import reply_model, uses_byok
 from obot.core.agent import BotProfile, generate_reply
+from obot.core.byok import failure_of
 from obot.core.tools import ToolServices, build_tools, truncate
 from obot.db.models import Bot, BotStatus
+from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -73,7 +76,10 @@ class Delegator:
             )
             if callee is None or callee.status != BotStatus.ACTIVE:
                 return f"ERROR: there is no active bot @{username} you can ask."
-            quota = await check_llm_quota(session, runtime.pricing, callee.owner, callee, now)
+            byok = uses_byok(callee)
+            quota = await check_llm_quota(
+                session, runtime.pricing, callee.owner, callee, now, byok=byok
+            )
             if not quota.allowed:
                 return f"ERROR: @{username} cannot answer right now (usage limit reached)."
 
@@ -84,10 +90,10 @@ class Delegator:
                 meter=UsageMeter(session, runtime.pricing, callee.owner, callee, now),
                 tavily_api_key=runtime.tavily_api_key,
             )
-            tier = allowed_tier(runtime.pricing, callee.owner, callee.model_tier)
             try:
+                chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, callee)
                 reply = await generate_reply(
-                    runtime.models.for_tier(tier),
+                    chosen.model,
                     BotProfile(name=callee.display_name, persona=callee.persona),
                     [],
                     question,
@@ -98,9 +104,11 @@ class Delegator:
                         "owner, not from a person. Answer it directly and completely."
                     ),
                 )
-            except Exception:
+            except Exception as e:
                 log.exception("delegation to bot %s failed", callee.id)
                 await session.commit()  # keep metered tool use
+                if byok and (failure := failure_of(e)) is not None:
+                    await notify_key_failure(runtime, callee, failure, now)
                 return f"ERROR: @{username} failed to answer."
             await record_llm_usage(
                 session,
@@ -110,6 +118,7 @@ class Delegator:
                 reply.model_name,
                 reply.input_tokens,
                 reply.output_tokens,
+                byok=chosen.byok,
             )
             await session.commit()
         log.info(

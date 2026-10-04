@@ -2,7 +2,8 @@
 
 Credits are computed for every call, also on the free plan, so per-bot daily
 caps work the same for everyone; they are only deducted on plans with
-`uses_credits`.
+`uses_credits`. Replies on the owner's own key (BYOK) are free and do not
+count as messages; their tool calls are metered as usual.
 """
 
 import asyncio
@@ -45,19 +46,20 @@ def allowed_tier(pricing: Pricing, owner: User, requested: str) -> str:
 
 
 async def check_llm_quota(
-    session: AsyncSession, pricing: Pricing, owner: User, bot: Bot, now: datetime
+    session: AsyncSession,
+    pricing: Pricing,
+    owner: User,
+    bot: Bot,
+    now: datetime,
+    *,
+    byok: bool = False,
 ) -> QuotaDecision:
+    """May the bot make a model call? `byok`: the call goes to the owner's own key."""
     plan = pricing.plan(owner.plan)
     since = start_of_day(now, owner.timezone)
 
-    if plan.daily_llm_messages is not None:
-        used = await session.scalar(
-            select(func.count()).where(
-                UsageEvent.owner_id == owner.id,
-                UsageEvent.kind == UsageKind.LLM,
-                UsageEvent.created_at >= since,
-            )
-        )
+    if plan.daily_llm_messages is not None and not byok:
+        used = await count_messages(session, owner, since)
         if used >= plan.daily_llm_messages:
             return QuotaDecision(QuotaReason.DAILY_MESSAGES)
 
@@ -70,10 +72,22 @@ async def check_llm_quota(
         if spent >= bot.daily_credit_cap:
             return QuotaDecision(QuotaReason.BOT_DAILY_CAP)
 
-    if plan.uses_credits and owner.credit_balance <= 0:
+    if plan.uses_credits and owner.credit_balance <= 0 and not byok:
         return QuotaDecision(QuotaReason.NO_CREDITS)
 
     return QuotaDecision()
+
+
+async def count_messages(session: AsyncSession, owner: User, since: datetime) -> int:
+    """Replies since `since` that count against the plan's daily message limit."""
+    return await session.scalar(
+        select(func.count()).where(
+            UsageEvent.owner_id == owner.id,
+            UsageEvent.kind == UsageKind.LLM,
+            UsageEvent.byok.is_(False),
+            UsageEvent.created_at >= since,
+        )
+    )
 
 
 async def record_llm_usage(
@@ -85,8 +99,13 @@ async def record_llm_usage(
     tokens_in: int,
     tokens_out: int,
     kind: UsageKind = UsageKind.LLM,
+    *,
+    byok: bool = False,
 ) -> UsageEvent:
-    """Record a model call; MEMORY calls cost credits but do not count as messages."""
+    """Record a model call; MEMORY calls cost credits but do not count as messages.
+
+    `byok` calls are paid by the owner at their provider: recorded for statistics, free here.
+    """
     event = UsageEvent(
         owner_id=owner.id,
         bot_id=bot.id,
@@ -94,7 +113,8 @@ async def record_llm_usage(
         model=model,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
-        cost_usd=pricing.cost_usd(model, tokens_in, tokens_out),
+        cost_usd=0 if byok else pricing.cost_usd(model, tokens_in, tokens_out),
+        byok=byok,
     )
     return await _record(session, pricing, owner, event)
 

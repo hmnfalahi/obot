@@ -11,17 +11,13 @@ from aiogram.types import ChatMemberUpdated, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from obot.billing.usage import (
-    QuotaReason,
-    UsageMeter,
-    allowed_tier,
-    check_llm_quota,
-    record_llm_usage,
-)
+from obot.billing.usage import QuotaReason, UsageMeter, check_llm_quota, record_llm_usage
+from obot.bots.byok import reply_model, uses_byok
 from obot.bots.service import mark_owner_started
 from obot.chat.history import ChatScope, recent_messages, record_message
 from obot.chat.membership import bots_in_chat, upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
+from obot.core.byok import failure_of
 from obot.core.rules import rule_note
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot as BotRecord
@@ -34,6 +30,7 @@ from obot.notices import first_today
 from obot.tasks.events import chat_trigger_tasks, enqueue_event, keyword_hit
 from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
+from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.conversations import (
     Thread,
     addresses,
@@ -313,7 +310,8 @@ async def _respond(
     owner = bot_record.owner
     group = inbound.group
     now = datetime.now(UTC)
-    quota = await check_llm_quota(session, runtime.pricing, owner, bot_record, now)
+    byok = uses_byok(bot_record)
+    quota = await check_llm_quota(session, runtime.pricing, owner, bot_record, now, byok=byok)
     if not quota.allowed:
         # Another bot cannot read a quota notice; only people get one.
         if not inbound.from_bot:
@@ -339,7 +337,7 @@ async def _respond(
             memories = await recall_facts(
                 session, runtime.pricing, bot_record, scope, text, runtime.embedder
             )
-        tier = allowed_tier(runtime.pricing, owner, bot_record.model_tier)
+        chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record)
         services = ToolServices(
             http=runtime.http,
             meter=UsageMeter(session, runtime.pricing, owner, bot_record, now),
@@ -350,7 +348,7 @@ async def _respond(
             peers_to_ask = delegation_note(await owner_peers(session, bot_record))
             note = "\n\n".join(n for n in (note, peers_to_ask) if n) or None
         reply = await generate_reply(
-            runtime.models.for_tier(tier),
+            chosen.model,
             profile,
             history,
             user_text,
@@ -360,13 +358,19 @@ async def _respond(
             memories=memories,
             note=note,
         )
-    except Exception:
+    except Exception as e:
         log.exception("agent failed for bot %s chat %s", bot_record.id, inbound.chat_id)
+        # Never fall back to our model: the owner chose to pay with their own key.
+        failure = failure_of(e) if byok else None
+        if failure is not None:
+            await notify_key_failure(runtime, bot_record, failure, now)
         if not inbound.from_bot:
             await runtime.sender.send_text(
                 inbound.client,
                 inbound.chat_id,
-                "Sorry, something went wrong. Please try again.",
+                t(lang_of(inbound.sender_language), "byok.chat_failed")
+                if failure is not None
+                else "Sorry, something went wrong. Please try again.",
                 group=group,
                 reply_to=reply_to,
             )
@@ -380,6 +384,7 @@ async def _respond(
         reply.model_name,
         reply.input_tokens,
         reply.output_tokens,
+        byok=chosen.byok,
     )
     log.info(
         "bot %s replied in %s with %s (%d in / %d out tokens, %d credits)",
