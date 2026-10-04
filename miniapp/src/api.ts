@@ -54,7 +54,19 @@ export interface Task {
   last_error: string | null
 }
 
+export type RuleKind = 'keyword' | 'regex' | 'topic' | 'new_member'
+export const RULE_KINDS: RuleKind[] = ['topic', 'keyword', 'new_member', 'regex']
+
+export interface ReplyRule {
+  kind: RuleKind
+  keywords?: string[]
+  pattern?: string | null
+  topic?: string | null
+  instruction?: string
+}
+
 export interface BotDetail extends BotSummary {
+  reply_rules: ReplyRule[]
   system_prompt: string
   language: string
   model_tier: string
@@ -70,6 +82,7 @@ export interface BotUpdate {
   language?: string
   tools?: ToolName[]
   model_tier?: 'cheap' | 'strong'
+  reply_rules?: ReplyRule[]
   daily_credit_cap?: number
   clear_daily_credit_cap?: boolean
 }

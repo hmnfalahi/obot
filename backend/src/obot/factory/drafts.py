@@ -3,6 +3,7 @@
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from obot.core.rules import parse_rules
 from obot.db.models import Bot, DraftKind, DraftState, FactoryDraft, User
 from obot.factory.designer import BotDraft, ExistingBot, make_username
 
@@ -85,6 +86,7 @@ async def apply_draft(session: AsyncSession, row: FactoryDraft, bot: Bot) -> Non
         "username_hint": draft.username_hint,
     }
     bot.tools = [t.value for t in draft.tools]
+    bot.reply_rules = [r.model_dump(mode="json", exclude_defaults=True) for r in draft.reply_rules]
     row.bot_id = bot.id
     row.state = DraftState.APPLIED
     await session.flush()
@@ -114,6 +116,7 @@ async def existing_bot_drafts(session: AsyncSession, user: User) -> list[Existin
             language=persona.get("language", "en"),
             tools=bot.tools or [],
             tasks=await requested_tasks(session, bot),
+            reply_rules=parse_rules(bot.reply_rules or []),
         )
         result.append(ExistingBot(username=bot.username, draft=draft))
     return result

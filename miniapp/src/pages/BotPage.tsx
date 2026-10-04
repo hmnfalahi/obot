@@ -3,6 +3,7 @@ import { api, TOOLS, type BotDetail, type Me, type Task, type TaskAdd, type Tool
 import { formatDateTime, formatNumber, useI18n } from '../i18n'
 import { haptic, openTelegramLink } from '../telegram'
 import { useLoad } from '../hooks'
+import { RulesEditor } from './RulesEditor'
 import { ErrorBox, Loading } from '../ui'
 
 export function BotPage({ id, me }: { id: number; me: Me }) {
@@ -29,6 +30,7 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
         </div>
       )}
       <ProfileForm bot={data} me={me} onSaved={bot.set} />
+      <RulesEditor bot={data} onSaved={bot.set} />
       <Tasks bot={data} me={me} onChange={bot.reload} />
       <Chats bot={data} />
       <Usage id={id} />

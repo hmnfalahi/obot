@@ -29,6 +29,7 @@ from obot.api.schemas import (
 )
 from obot.billing.usage import start_of_day
 from obot.chat.membership import list_memberships
+from obot.core.rules import parse_rules
 from obot.db.models import Bot, DraftState, Task, TaskRun, UsageEvent, UsageKind, User
 from obot.factory.designer import BotDraft
 from obot.factory.drafts import start_draft
@@ -138,6 +139,7 @@ async def _detail(session: Session, bot: Bot) -> BotDetail:
     owner_tg_id = bot.owner.tg_user_id
     return BotDetail(
         **_summary(bot).model_dump(),
+        reply_rules=parse_rules(bot.reply_rules or []),
         system_prompt=persona.get("system_prompt", ""),
         language=persona.get("language", "fa"),
         model_tier=bot.model_tier,
@@ -178,6 +180,12 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
     bot.persona = persona
     if body.tools is not None:
         bot.tools = [t.value for t in body.tools]
+    if body.reply_rules is not None:
+        bot.reply_rules = [
+            r.model_dump(mode="json", exclude_defaults=True)
+            for r in body.reply_rules
+            if r.is_complete()
+        ]
     if body.model_tier is not None:
         if body.model_tier not in state.pricing.plan(bot.owner.plan).model_tiers:
             raise HTTPException(403, "this model needs the paid plan")

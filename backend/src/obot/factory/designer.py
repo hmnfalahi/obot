@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
+from obot.core.rules import MAX_RULES, ReplyRule
+
 
 class ToolName(enum.StrEnum):
     WEB_SEARCH = "web_search"
@@ -57,6 +59,14 @@ class BotDraft(BaseModel):
             "destination and time. Keep one-off requests one-off with their date (e.g. "
             "'Today 2026-10-03 at 15:52, ...') and recurring ones recurring ('Every day at "
             "08:00, ...'). Mention a timezone only if the user did."
+        ),
+    )
+    reply_rules: list[ReplyRule] = Field(
+        default_factory=list,
+        max_length=MAX_RULES,
+        description=(
+            "When the bot answers in groups without being mentioned. Only when the user asks "
+            "for it (e.g. 'answer questions about our product', 'welcome new members')."
         ),
     )
 
@@ -108,6 +118,13 @@ action 'chat' and briefly explain what you can do.
 
 Available tools (only choose what the bot needs):
 {tools}
+
+Group reply rules (in groups the bot otherwise only answers when mentioned or replied to):
+- keyword: answer messages containing any of `keywords`;
+- regex: answer messages matching `pattern` (only if the user gives a precise pattern);
+- topic: answer messages about `topic`, described in one sentence;
+- new_member: welcome people who join.
+Give each rule a short `instruction` on how to answer. Prefer topic over long keyword lists.
 
 Write `reply`, `questions` and `description` in the user's language. Keep `reply` to one or
 two sentences; the draft itself is shown to the user separately."""

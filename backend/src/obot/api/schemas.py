@@ -3,6 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from obot.core.rules import MAX_RULES, ReplyRule
 from obot.factory.designer import ToolName
 
 
@@ -62,6 +63,7 @@ class TaskOut(BaseModel):
 
 
 class BotDetail(BotSummary):
+    reply_rules: list[ReplyRule]
     system_prompt: str
     language: str
     model_tier: str
@@ -91,6 +93,7 @@ class BotUpdate(BaseModel):
     language: str | None = Field(default=None, max_length=8)
     tools: list[ToolName] | None = None
     model_tier: Literal["cheap", "strong"] | None = None
+    reply_rules: list[ReplyRule] | None = Field(default=None, max_length=MAX_RULES)
     daily_credit_cap: int | None = Field(default=None, ge=0)
     clear_daily_credit_cap: bool = False
 
