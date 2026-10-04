@@ -18,6 +18,8 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 MAX_BYTES = 2_000_000
+# Longest text a tool returns to the model
+MAX_TOOL_TEXT = 8000
 TIMEOUT_SECONDS = 15
 MAX_REDIRECTS = 5
 USER_AGENT = "Mozilla/5.0 (compatible; ObotFetcher/1.0; +https://t.me/obotfactorybot)"
@@ -33,6 +35,10 @@ class FetchResult:
     status: int
     content_type: str
     body: bytes
+
+
+def truncate(text: str, limit: int = MAX_TOOL_TEXT) -> str:
+    return text if len(text) <= limit else text[:limit] + "\n[...truncated]"
 
 
 def normalize_url(url: str) -> str:

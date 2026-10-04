@@ -22,6 +22,7 @@ class MeOut(BaseModel):
     credit_balance: int
     max_bots: int
     max_tasks: int
+    max_apis: int
     messages_today: Quota
     searches_today: Quota
 
@@ -78,12 +79,32 @@ class ByokIn(BaseModel):
     api_key: str | None = Field(default=None, min_length=8, max_length=512)
 
 
+class ApiOut(BaseModel):
+    id: int
+    name: str
+    description: str
+    method: str
+    url: str
+    # Values are secret and never sent back.
+    header_names: list[str]
+
+
+class ApiIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    description: str = Field(min_length=1, max_length=500)
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    url: str = Field(min_length=8, max_length=2048)
+    # Omitted on update: keep the stored headers.
+    headers: dict[str, str] | None = None
+
+
 class BotDetail(BotSummary):
     reply_rules: list[ReplyRule]
     system_prompt: str
     language: str
     model_tier: str
     byok: ByokOut | None
+    apis: list[ApiOut]
     daily_credit_cap: int | None
     chats: list[ChatOut]
     tasks: list[TaskOut]

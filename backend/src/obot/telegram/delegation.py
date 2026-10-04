@@ -12,11 +12,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from obot.billing.usage import UsageMeter, check_llm_quota, record_llm_usage
+from obot.billing.usage import check_llm_quota, record_llm_usage
 from obot.bots.byok import reply_model, uses_byok
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
-from obot.core.tools import ToolServices, build_tools, truncate
+from obot.core.tools import truncate
 from obot.db.models import Bot, BotStatus
 from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.runtime import Runtime
@@ -83,12 +83,20 @@ class Delegator:
             if not quota.allowed:
                 return f"ERROR: @{username} cannot answer right now (usage limit reached)."
 
+            # Imported here: the toolkit builds Delegators itself.
+            from obot.telegram.toolkit import toolkit
+
             # Depth 1: the callee gets its tools except delegation itself.
-            tools = [t for t in (callee.tools or []) if t != DELEGATION_TOOL]
-            services = ToolServices(
-                http=runtime.http,
-                meter=UsageMeter(session, runtime.pricing, callee.owner, callee, now),
-                tavily_api_key=runtime.tavily_api_key,
+            kit = await toolkit(
+                session,
+                runtime,
+                callee,
+                now,
+                delegation=False,
+                note=(
+                    f"This question comes from {self._caller_name}, another bot of your "
+                    "owner, not from a person. Answer it directly and completely."
+                ),
             )
             try:
                 chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, callee)
@@ -97,12 +105,9 @@ class Delegator:
                     BotProfile(name=callee.display_name, persona=callee.persona),
                     [],
                     question,
-                    tools=build_tools(tools),
-                    services=services,
-                    note=(
-                        f"This question comes from {self._caller_name}, another bot of your "
-                        "owner, not from a person. Answer it directly and completely."
-                    ),
+                    tools=kit.tools,
+                    services=kit.services,
+                    note=kit.note,
                 )
             except Exception as e:
                 log.exception("delegation to bot %s failed", callee.id)

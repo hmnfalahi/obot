@@ -18,6 +18,7 @@ export interface Me {
   credit_balance: number
   max_bots: number
   max_tasks: number
+  max_apis: number
   messages_today: Quota
   searches_today: Quota
 }
@@ -92,12 +93,34 @@ export interface ByokIn {
   api_key?: string
 }
 
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+export const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+
+export interface ApiEndpoint {
+  id: number
+  name: string
+  description: string
+  method: HttpMethod
+  url: string
+  header_names: string[]
+}
+
+export interface ApiIn {
+  name: string
+  description: string
+  method: HttpMethod
+  url: string
+  /** Omit on update to keep the stored (secret) headers. */
+  headers?: Record<string, string>
+}
+
 export interface BotDetail extends BotSummary {
   reply_rules: ReplyRule[]
   system_prompt: string
   language: string
   model_tier: string
   byok: Byok | null
+  apis: ApiEndpoint[]
   daily_credit_cap: number | null
   chats: Chat[]
   tasks: Task[]
@@ -178,6 +201,9 @@ export const api = {
   updateBot: (id: number, body: BotUpdate) => request<BotDetail>('PATCH', `/bots/${id}`, body),
   setByok: (id: number, body: ByokIn) => request<BotDetail>('PUT', `/bots/${id}/byok`, body),
   deleteByok: (id: number) => request<BotDetail>('DELETE', `/bots/${id}/byok`),
+  addApi: (botId: number, body: ApiIn) => request<BotDetail>('POST', `/bots/${botId}/apis`, body),
+  updateApi: (id: number, body: ApiIn) => request<BotDetail>('PUT', `/apis/${id}`, body),
+  deleteApi: (id: number) => request<BotDetail>('DELETE', `/apis/${id}`),
   usage: (id: number, days = 7) => request<UsageDay[]>('GET', `/bots/${id}/usage?days=${days}`),
   addTask: (id: number, text: string) =>
     request<TaskAdd>('POST', `/bots/${id}/tasks`, { request: text }),
