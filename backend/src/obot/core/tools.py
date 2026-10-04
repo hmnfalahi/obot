@@ -6,7 +6,7 @@ bot can tell the user what went wrong instead of failing the whole reply.
 """
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -38,6 +38,8 @@ class ToolServices:
     http: httpx.AsyncClient
     meter: ToolMeter
     tavily_api_key: str | None = None
+    # Asks another bot of the same owner (username, question) -> answer; see ask_bot.
+    delegate: Callable[[str, str], Awaitable[str]] | None = None
 
 
 def truncate(text: str, limit: int = MAX_TOOL_TEXT) -> str:
@@ -124,10 +126,22 @@ async def read_rss(ctx: RunContext[ToolServices], url: str) -> str:
     return truncate(f"Feed: {title}\n\n" + "\n\n".join(items))
 
 
+async def ask_bot(ctx: RunContext[ToolServices], username: str, question: str) -> str:
+    """Ask another bot of your owner (by @username) and get its answer.
+
+    Use it when that bot is better suited, e.g. a translator or a specialist. Give
+    it a complete, self-contained question: it cannot see this conversation.
+    """
+    if ctx.deps.delegate is None:
+        return "ERROR: asking other bots is not available here."
+    return await ctx.deps.delegate(username.strip().lstrip("@"), question)
+
+
 TOOLS = {
     "web_search": Tool(web_search),
     "read_url": Tool(read_url),
     "rss": Tool(read_rss),
+    "ask_bots": Tool(ask_bot),
 }
 
 
