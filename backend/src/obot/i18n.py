@@ -39,11 +39,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.tools": "Tools",
         "card.tasks": "Tasks",
         "card.tasks_note": "",
-        "card.rules": "Group replies without a mention (bot must be a group admin)",
-        "rule.keyword": "messages with",
-        "rule.regex": "messages matching",
-        "rule.topic": "messages about",
-        "rule.new_member": "welcome new members",
         "card.hint": "Send a message to change anything.",
         "btn.create": "✅ Create bot",
         "btn.save": "💾 Save",
@@ -73,7 +68,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tasks.rejected": "⚠️ Not scheduled:",
         "tasks.waiting": "Tasks that message you start after you press Start in @{username}.",
         "tasks.none": "@{username} has no scheduled tasks now.",
-        "tasks.hook_url": "  Call this address (POST) to trigger it; keep it secret: {url}",
         "owner.task_waiting": (
             "@{username} has a scheduled task for you, but you haven't pressed Start in it yet."
         ),
@@ -142,11 +136,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.tools": "ابزارها",
         "card.tasks": "کارها",
         "card.tasks_note": "",
-        "card.rules": "پاسخ در گروه بدون منشن (ربات باید ادمین گروه باشه)",
-        "rule.keyword": "پیام‌های شامل",
-        "rule.regex": "پیام‌های منطبق با",
-        "rule.topic": "پیام‌های درباره‌ی",
-        "rule.new_member": "خوش‌آمدگویی به عضوهای جدید",
         "card.hint": "برای تغییر هر چیزی پیام بده.",
         "btn.create": "✅ ساخت ربات",
         "btn.save": "💾 ذخیره",
@@ -176,7 +165,6 @@ MESSAGES: dict[str, dict[str, str]] = {
             "کارهایی که برای تو پیام می‌فرستن، بعد از زدن Start در @{username} شروع می‌شن."
         ),
         "tasks.none": "@{username} الان کار زمان‌بندی‌شده‌ای نداره.",
-        "tasks.hook_url": "  برای اجرا این آدرس رو (POST) صدا بزن و محرمانه نگهش دار: {url}",
         "owner.task_waiting": (
             "@{username} یه کار زمان‌بندی‌شده برات داره، ولی هنوز Start رو توش نزدی."
         ),

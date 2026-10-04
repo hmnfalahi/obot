@@ -40,15 +40,6 @@ export interface Chat {
   is_admin: boolean
 }
 
-export type TriggerKind =
-  | 'schedule'
-  | 'rss'
-  | 'page_change'
-  | 'price'
-  | 'group_keyword'
-  | 'new_member'
-  | 'webhook'
-
 export interface TaskStep {
   instruction: string
   /** null: the task's own bot */
@@ -59,9 +50,7 @@ export interface Task {
   id: number
   summary: string
   instruction: string
-  trigger: TriggerKind
-  hook_url: string | null
-  schedule_kind: 'cron' | 'once' | null
+  schedule_kind: 'cron' | 'once'
   cron: string | null
   timezone: string
   destination_chat_id: number
@@ -71,17 +60,6 @@ export interface Task {
   last_run_at: string | null
   last_error: string | null
   steps: TaskStep[]
-}
-
-export type RuleKind = 'keyword' | 'regex' | 'topic' | 'new_member'
-export const RULE_KINDS: RuleKind[] = ['topic', 'keyword', 'new_member', 'regex']
-
-export interface ReplyRule {
-  kind: RuleKind
-  keywords?: string[]
-  pattern?: string | null
-  topic?: string | null
-  instruction?: string
 }
 
 export type Provider = 'openrouter' | 'openai' | 'anthropic'
@@ -122,7 +100,6 @@ export interface ApiIn {
 }
 
 export interface BotDetail extends BotSummary {
-  reply_rules: ReplyRule[]
   system_prompt: string
   language: string
   model_tier: string
@@ -140,7 +117,6 @@ export interface BotUpdate {
   language?: string
   tools?: ToolName[]
   model_tier?: 'cheap' | 'strong'
-  reply_rules?: ReplyRule[]
   daily_credit_cap?: number
   clear_daily_credit_cap?: boolean
 }

@@ -45,8 +45,10 @@ async def session() -> AsyncIterator[AsyncSession]:
     await _ensure_test_database()
     engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     async with engine.begin() as conn:
+        # The whole schema, not drop_all: tables removed from the models would linger.
+        await conn.execute(text("drop schema public cascade"))
+        await conn.execute(text("create schema public"))
         await conn.execute(text("create extension if not exists vector"))
-        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     async with AsyncSession(engine, expire_on_commit=False) as s:
         yield s

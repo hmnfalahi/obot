@@ -17,8 +17,6 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
-from obot.core.rules import MAX_RULES, ReplyRule
-
 
 class ToolName(enum.StrEnum):
     WEB_SEARCH = "web_search"
@@ -62,14 +60,6 @@ class BotDraft(BaseModel):
             "'Today 2026-10-03 at 15:52, ...') and recurring ones recurring ('Every day at "
             "08:00, ...'). Mention a timezone only if the user did. Keep the exact numbers "
             "and units the user gave (e.g. '110,000 toman'); never convert them."
-        ),
-    )
-    reply_rules: list[ReplyRule] = Field(
-        default_factory=list,
-        max_length=MAX_RULES,
-        description=(
-            "When the bot answers in groups without being mentioned. Only when the user asks "
-            "for it (e.g. 'answer questions about our product', 'welcome new members')."
         ),
     )
 
@@ -122,16 +112,10 @@ action 'chat' and briefly explain what you can do.
 Available tools (only choose what the bot needs):
 {tools}
 
-Group reply rules (in groups the bot otherwise only answers when mentioned or replied to):
-- keyword: answer messages containing any of `keywords`;
-- regex: answer messages matching `pattern` (only if the user gives a precise pattern);
-- topic: answer messages about `topic`, described in one sentence;
-- new_member: welcome people who join.
-Give each rule a short `instruction` on how to answer. Prefer topic over long keyword lists.
-A rule only makes the bot answer inside that group. If the user wants to be told somewhere
-else (e.g. privately) or wants something done when an event happens (a keyword in a group,
-someone joining, a new RSS item, a page or price change, a webhook call), that is a task:
-describe it in `tasks` with its trigger, not as a rule.
+In groups a bot only answers when it is mentioned or replied to. Tasks only run at set
+times (recurring or one-off); a bot cannot react to events such as new feed items, page or
+price changes or people joining. If the user asks for that, say so briefly and offer a
+scheduled check instead (e.g. 'every hour, check the price and tell me if it is above X').
 
 Write `reply`, `questions` and `description` in the user's language. Keep `reply` to one or
 two sentences; the draft itself is shown to the user separately."""

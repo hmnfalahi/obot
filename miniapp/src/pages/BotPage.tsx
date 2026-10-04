@@ -17,7 +17,6 @@ import {
 import { formatDateTime, formatNumber, useI18n } from '../i18n'
 import { haptic, openTelegramLink } from '../telegram'
 import { useLoad } from '../hooks'
-import { RulesEditor } from './RulesEditor'
 import { ErrorBox, Loading } from '../ui'
 
 export function BotPage({ id, me }: { id: number; me: Me }) {
@@ -46,7 +45,6 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
       <ProfileForm bot={data} me={me} onSaved={bot.set} />
       <OwnKey bot={data} onSaved={bot.set} />
       <Apis bot={data} me={me} onSaved={bot.set} />
-      <RulesEditor bot={data} onSaved={bot.set} />
       <Tasks bot={data} me={me} onChange={bot.reload} />
       <Chats bot={data} />
       <Usage id={id} />
@@ -532,9 +530,7 @@ function TaskCard(props: {
         <strong>{task.summary}</strong>
         {task.status !== 'active' && <span className="badge">{t(`status.${task.status}`)}</span>}
       </div>
-      <div className="hint">
-        {t(`trigger.${task.trigger}`)} · {destination}
-      </div>
+      <div className="hint">{destination}</div>
       {task.steps.length > 0 && (
         <div className="hint">
           {t('chainSteps')}
@@ -545,12 +541,6 @@ function TaskCard(props: {
               </li>
             ))}
           </ol>
-        </div>
-      )}
-      {task.hook_url && (
-        <div className="hint">
-          {t('hookUrl')}
-          <input dir="ltr" readOnly value={task.hook_url} onFocus={(e) => e.target.select()} />
         </div>
       )}
       {task.next_run_at && task.status !== 'paused' && (
