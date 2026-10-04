@@ -7,12 +7,13 @@ from datetime import UTC, datetime
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction, ChatMemberStatus, ChatType
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import ChatMemberUpdated, Message
+from aiogram.types import ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import QuotaReason, check_llm_quota, record_llm_usage
 from obot.bots.byok import reply_model, uses_byok
 from obot.bots.service import mark_owner_started
+from obot.bots.users import has_started, join_bot, leave_bot
 from obot.chat.history import ChatScope, recent_messages, record_message
 from obot.chat.membership import upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
@@ -48,6 +49,7 @@ MEMBER_STATUSES = {
 async def on_start(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
+    await join_bot(session, bot_record, message.from_user.id, message.from_user.language_code)
     first_time = await mark_owner_started(session, bot_record, message.from_user.id)
     if first_time:
         await resume_waiting(session, bot_record, datetime.now(UTC))
@@ -98,9 +100,11 @@ async def on_membership(
 ) -> None:
     status = event.new_chat_member.status
     if event.chat.type == ChatType.PRIVATE:
-        # The owner blocked the bot: it can no longer message them until they start it again.
-        if status == ChatMemberStatus.KICKED and event.from_user.id == bot_record.owner.tg_user_id:
-            bot_record.owner_started = False
+        # Blocked: the person stops using the bot until they start it again.
+        if status == ChatMemberStatus.KICKED:
+            await leave_bot(session, bot_record, event.from_user.id)
+            if event.from_user.id == bot_record.owner.tg_user_id:
+                bot_record.owner_started = False
         return
     await upsert_membership(
         session,
@@ -118,7 +122,8 @@ async def on_membership(
 async def on_private_text(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
-    # Any private message from the owner opens the chat, not only /start.
+    # Any private message starts using the bot, not only /start.
+    await join_bot(session, bot_record, message.from_user.id, message.from_user.language_code)
     if await mark_owner_started(session, bot_record, message.from_user.id):
         await resume_waiting(session, bot_record, datetime.now(UTC))
     scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
@@ -137,8 +142,33 @@ async def on_group_text(
     incoming = await _record_incoming(session, scope, message)
     if not is_addressed(message, message.bot.id, bot_record.username):
         return
+    if not await has_started(session, bot_record, message.from_user.id):
+        await ask_to_start(message, bot_record, runtime)
+        return
     text = strip_mention(message.text, bot_record.username) or message.text
     await _respond(Inbound.of(message), text, incoming, scope, session, bot_record, runtime)
+
+
+async def ask_to_start(message: Message, bot_record: BotRecord, runtime: Runtime) -> None:
+    """Someone who never started the bot addressed it in a group: point them to Start.
+
+    At most once a day per person and group, so the group is not flooded.
+    """
+    key = f"start-first:{bot_record.id}:{message.chat.id}:{message.from_user.id}"
+    if not await first_today(runtime.redis, key, datetime.now(UTC), "UTC"):
+        return
+    lang = lang_of(message.from_user.language_code)
+    button = InlineKeyboardButton(
+        text=t(lang, "btn.start_bot"), url=f"https://t.me/{bot_record.username}?start=g"
+    )
+    await runtime.sender.send_text(
+        message.bot,
+        message.chat.id,
+        t(lang, "group.start_first"),
+        group=True,
+        reply_to=message.message_id,
+        buttons=InlineKeyboardMarkup(inline_keyboard=[[button]]),
+    )
 
 
 async def _record_incoming(

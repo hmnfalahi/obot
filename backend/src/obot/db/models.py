@@ -226,6 +226,20 @@ class FactoryDraft(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
+class BotUser(Base):
+    """A person who started a bot in private: only they may use it (SPEC 8.7)."""
+
+    __tablename__ = "bot_users"
+    __table_args__ = (UniqueConstraint("bot_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    started_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Set when they blocked the bot or removed it from their list; None while they use it.
+    left_at: Mapped[datetime | None]
+
+
 class BotChat(Base):
     """Groups and channels a bot is (or was) a member of."""
 
