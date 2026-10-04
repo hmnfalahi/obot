@@ -65,6 +65,7 @@ def build_instructions(
     *,
     group: bool = False,
     memories: Sequence[str] = (),
+    note: str | None = None,
 ) -> str:
     custom = (profile.persona.get("system_prompt") or "").strip() or DEFAULT_INSTRUCTIONS
     now = now or datetime.now(UTC)
@@ -76,6 +77,8 @@ def build_instructions(
     if memories:
         facts = "\n".join(f"- {m}" for m in memories)
         text += f"\n\nWhat you remember about this chat (may be outdated):\n{facts}"
+    if note:
+        text += f"\n\n{note}"
     return text
 
 
@@ -99,10 +102,11 @@ async def generate_reply(
     *,
     group: bool = False,
     memories: Sequence[str] = (),
+    note: str | None = None,
 ) -> Reply:
     agent = Agent(
         model,
-        instructions=build_instructions(profile, group=group, memories=memories),
+        instructions=build_instructions(profile, group=group, memories=memories, note=note),
         tools=tools,
         deps_type=ToolServices,
     )

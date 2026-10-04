@@ -71,6 +71,8 @@ class Bot(Base):
     persona: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     model_tier: Mapped[str] = mapped_column(String(32), default="cheap")
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Group reply rules; see obot.core.rules
+    reply_rules: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
     daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[BotStatus] = mapped_column(
         Enum(

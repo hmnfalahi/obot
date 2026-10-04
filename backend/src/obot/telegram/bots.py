@@ -20,6 +20,7 @@ from obot.bots.service import mark_owner_started
 from obot.chat.history import ChatScope, recent_messages, record_message
 from obot.chat.membership import upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
+from obot.core.rules import rule_note
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import Bot as BotRecord
 from obot.db.models import Message as StoredMessage
@@ -31,6 +32,7 @@ from obot.notices import first_today
 from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
 from obot.telegram.moderation import report_from_bot
+from obot.telegram.reply_rules import pick_rule, welcome_rule
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -137,10 +139,54 @@ async def on_group_text(
     # Bot-to-bot conversations arrive in phase 2.
     if message.from_user.is_bot:
         return
+    note = None
     if not is_addressed(message, message.bot.id, bot_record.username):
-        return
+        # Not asked directly: answer only if one of the owner's reply rules says so.
+        rule = await pick_rule(
+            session, runtime, bot_record, message.chat.id, message.text, datetime.now(UTC)
+        )
+        if rule is None:
+            await session.commit()  # keep the metered rule checks
+            return
+        note = rule_note(rule)
     text = strip_mention(message.text, bot_record.username) or message.text
-    await _respond(message, text, incoming, scope, session, bot_record, runtime, group=True)
+    await _respond(
+        message, text, incoming, scope, session, bot_record, runtime, group=True, note=note
+    )
+
+
+@router.message(F.new_chat_members, F.chat.type.in_(GROUP_TYPES))
+async def on_new_members(
+    message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
+) -> None:
+    people = [u for u in message.new_chat_members if not u.is_bot]
+    rule = welcome_rule(bot_record)
+    if not people or rule is None:
+        return
+    names = ", ".join(u.full_name for u in people)
+    scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
+    text = f"{names} joined the group."
+    incoming = await record_message(
+        session,
+        scope,
+        sender_kind=SenderKind.HUMAN,
+        text=text,
+        tg_message_id=message.message_id,
+        sender_tg_id=people[0].id,
+        sender_name=names,
+    )
+    await session.commit()
+    await _respond(
+        message,
+        text,
+        incoming,
+        scope,
+        session,
+        bot_record,
+        runtime,
+        group=True,
+        note=rule_note(rule),
+    )
 
 
 async def _record_incoming(
@@ -177,6 +223,7 @@ async def _respond(
     runtime: Runtime,
     *,
     group: bool = False,
+    note: str | None = None,
 ) -> None:
     owner = bot_record.owner
     now = datetime.now(UTC)
@@ -215,6 +262,7 @@ async def _respond(
             services=services,
             group=group,
             memories=memories,
+            note=note,
         )
     except Exception:
         log.exception("agent failed for bot %s chat %s", bot_record.id, message.chat.id)

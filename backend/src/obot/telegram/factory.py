@@ -30,6 +30,7 @@ from obot.bots.service import (
     get_or_create_user,
     register_managed_bot,
 )
+from obot.core.rules import ReplyRule, RuleKind
 from obot.db.models import Bot as BotRecord
 from obot.db.models import BotStatus, DraftKind, DraftState, FactoryDraft, User
 from obot.factory.designer import BotDraft, design
@@ -73,6 +74,9 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
     if draft.tools:
         tools = ", ".join(t(lang, f"tool.{tool}") for tool in draft.tools)
         lines += ["", f"🧰 {t(lang, 'card.tools')}: {tools}"]
+    if draft.reply_rules:
+        lines += ["", f"💬 {t(lang, 'card.rules')}:"]
+        lines += [f"• {html.escape(describe_rule(lang, rule))}" for rule in draft.reply_rules]
     if draft.tasks:
         lines += ["", f"⏰ {t(lang, 'card.tasks')}:"]
         lines += [f"• {html.escape(task)}" for task in draft.tasks]
@@ -82,6 +86,17 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
 
 def panel_button(lang: str, url: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=t(lang, "btn.panel"), web_app=WebAppInfo(url=url))
+
+
+def describe_rule(lang: str, rule: ReplyRule) -> str:
+    detail = {
+        RuleKind.KEYWORD: ", ".join(rule.keywords),
+        RuleKind.REGEX: rule.pattern or "",
+        RuleKind.TOPIC: rule.topic or "",
+        RuleKind.NEW_MEMBER: "",
+    }[rule.kind]
+    text = t(lang, f"rule.{rule.kind}")
+    return f"{text}: {detail}" if detail else text
 
 
 def card_keyboard(
