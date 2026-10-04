@@ -55,7 +55,7 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
           <h2>{t('usedBots')}</h2>
           <p className="hint">{t('usedBotsHint')}</p>
           {used.data.map((bot) => (
-            <UsedBotItem key={bot.id} bot={bot} onRemoved={used.reload} />
+            <UsedBotItem key={bot.id} bot={bot} onRemoved={used.reload} navigate={navigate} />
           ))}
         </>
       )}
@@ -63,7 +63,15 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
   )
 }
 
-function UsedBotItem({ bot, onRemoved }: { bot: UsedBot; onRemoved: () => void }) {
+function UsedBotItem({
+  bot,
+  onRemoved,
+  navigate,
+}: {
+  bot: UsedBot
+  onRemoved: () => void
+  navigate: (r: Route) => void
+}) {
   const { t } = useI18n()
   const [error, setError] = useState<string | null>(null)
 
@@ -83,9 +91,14 @@ function UsedBotItem({ bot, onRemoved }: { bot: UsedBot; onRemoved: () => void }
     <div className="list-item">
       <div className="row between">
         <strong>{bot.display_name}</strong>
-        <button className="btn secondary" onClick={remove}>
-          {t('removeFromList')}
-        </button>
+        <div className="row">
+          <button className="btn secondary" onClick={() => navigate({ page: 'mine', id: bot.id })}>
+            {t('mySettings')}
+          </button>
+          <button className="btn secondary" onClick={remove}>
+            {t('removeFromList')}
+          </button>
+        </div>
       </div>
       <div className="hint">@{bot.username}</div>
       {bot.description && <div>{bot.description}</div>}

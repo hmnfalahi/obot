@@ -71,17 +71,42 @@ export interface Task {
 export type Provider = 'openrouter' | 'openai' | 'anthropic'
 export const PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic']
 
-export interface Byok {
+export const PROVIDER_NAMES: Record<Provider, string> = {
+  openrouter: 'OpenRouter',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+}
+
+export const MODEL_EXAMPLES: Record<Provider, string> = {
+  openrouter: 'anthropic/claude-sonnet-5.5',
+  openai: 'gpt-5-mini',
+  anthropic: 'claude-haiku-4-5',
+}
+
+/** A key in the user's wallet; the key itself never comes back. */
+export interface WalletKey {
   provider: Provider
-  model: string
   key_hint: string
 }
 
-export interface ByokIn {
-  provider: Provider
-  model: string
-  /** Omit to keep the stored key of the same provider. */
-  api_key?: string
+/** The user's own settings for a bot they use. */
+export interface MySettings {
+  bot_id: number
+  username: string
+  display_name: string
+  is_owner: boolean
+  model_tier: string
+  recommended_model: string | null
+  key_provider: Provider | null
+  model: string | null
+  daily_credit_cap: number | null
+  wallet: Provider[]
+}
+
+export interface MySettingsIn {
+  key_provider: Provider | null
+  model: string | null
+  daily_credit_cap: number | null
 }
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -127,7 +152,7 @@ export interface BotDetail extends BotSummary {
   system_prompt: string
   language: string
   model_tier: string
-  byok: Byok | null
+  recommended_model: string | null
   apis: ApiEndpoint[]
   daily_credit_cap: number | null
   chats: Chat[]
@@ -140,8 +165,7 @@ export interface BotUpdate {
   language?: string
   tools?: ToolName[]
   model_tier?: 'cheap' | 'strong'
-  daily_credit_cap?: number
-  clear_daily_credit_cap?: boolean
+  recommended_model?: string
   visibility?: Visibility
   allowed_user_ids?: number[]
 }
@@ -204,8 +228,12 @@ export const api = {
   removeUsedBot: (id: number) => request<void>('DELETE', `/used-bots/${id}`),
   bot: (id: number) => request<BotDetail>('GET', `/bots/${id}`),
   updateBot: (id: number, body: BotUpdate) => request<BotDetail>('PATCH', `/bots/${id}`, body),
-  setByok: (id: number, body: ByokIn) => request<BotDetail>('PUT', `/bots/${id}/byok`, body),
-  deleteByok: (id: number) => request<BotDetail>('DELETE', `/bots/${id}/byok`),
+  keys: () => request<WalletKey[]>('GET', '/keys'),
+  putKey: (provider: Provider, apiKey: string) =>
+    request<WalletKey[]>('PUT', `/keys/${provider}`, { api_key: apiKey }),
+  deleteKey: (provider: Provider) => request<WalletKey[]>('DELETE', `/keys/${provider}`),
+  mine: (botId: number) => request<MySettings>('GET', `/bots/${botId}/mine`),
+  putMine: (botId: number, body: MySettingsIn) => request<MySettings>('PUT', `/bots/${botId}/mine`, body),
   addApi: (botId: number, body: ApiIn) => request<BotDetail>('POST', `/bots/${botId}/apis`, body),
   updateApi: (id: number, body: ApiIn) => request<BotDetail>('PUT', `/apis/${id}`, body),
   deleteApi: (id: number) => request<BotDetail>('DELETE', `/apis/${id}`),

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import QuotaReason, check_llm_quota, record_llm_usage
 from obot.bots.access import can_use
-from obot.bots.byok import pays_with_key, reply_model
+from obot.bots.byok import reply_model
 from obot.bots.service import mark_owner_started
 from obot.bots.users import join_bot, leave_bot, started_user
 from obot.chat.history import ChatScope, recent_messages, record_message
@@ -27,7 +27,6 @@ from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
 from obot.telegram.addressing import is_addressed, strip_mention
-from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.runtime import Runtime
 from obot.telegram.scheduling import Scheduler
@@ -72,6 +71,27 @@ async def on_report(
     runtime: Runtime,
 ) -> None:
     await report_from_bot(message, session, runtime, bot_record, command.args)
+
+
+@router.message(Command("settings"), F.chat.type == ChatType.PRIVATE)
+async def on_settings(
+    message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
+) -> None:
+    """Own key, model and daily cap live in the panel, opened from the factory chat."""
+    if not await _allowed_in_private(message, bot_record, runtime):
+        return
+    lang = lang_of(message.from_user.language_code)
+    button = InlineKeyboardButton(
+        text=t(lang, "btn.my_settings"),
+        url=f"https://t.me/{runtime.factory_username}?start=mine_{bot_record.id}",
+    )
+    await runtime.sender.send_text(
+        message.bot,
+        message.chat.id,
+        t(lang, "bot.settings"),
+        group=False,
+        buttons=InlineKeyboardMarkup(inline_keyboard=[[button]]),
+    )
 
 
 @router.message(Command("forget"))
@@ -258,11 +278,17 @@ async def _respond(
         return
     group = inbound.group
     now = datetime.now(UTC)
-    byok = pays_with_key(bot_record, payer)
-    quota = await check_llm_quota(session, runtime.pricing, payer, bot_record, now, byok=byok)
+    chosen = await reply_model(
+        session, runtime.models, runtime.cipher, runtime.pricing, bot_record, payer
+    )
+    quota = await check_llm_quota(
+        session, runtime.pricing, payer, bot_record, now, byok=chosen.byok
+    )
     if not quota.allowed:
         await notify_quota_exhausted(inbound, bot_record, payer, quota.reason, runtime, now)
         return
+    if chosen.downgraded:
+        await suggest_stronger_model(inbound, bot_record, payer, runtime)
 
     history = [
         to_turn(m, group)
@@ -279,7 +305,6 @@ async def _respond(
             memories = await recall_facts(
                 session, runtime.pricing, bot_record, payer, scope, text, runtime.embedder
             )
-        chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record, payer)
         # People make their own scheduled tasks in a private chat (SPEC 8.7).
         schedule = (
             None
@@ -302,14 +327,13 @@ async def _respond(
         )
     except Exception as e:
         log.exception("agent failed for bot %s chat %s", bot_record.id, inbound.chat_id)
-        # Never fall back to our model: the owner chose to pay with their own key.
-        failure = failure_of(e) if byok else None
-        if failure is not None:
-            await notify_key_failure(runtime, bot_record, failure, now)
+        # Never fall back to our model: the person chose to pay with their own key.
+        failure = failure_of(e) if chosen.byok else None
+        lang = lang_of(inbound.sender_language)
         await runtime.sender.send_text(
             inbound.client,
             inbound.chat_id,
-            t(lang_of(inbound.sender_language), "byok.chat_failed")
+            t(lang, "byok.chat_failed", reason=t(lang, f"byok.reason.{failure}"))
             if failure is not None
             else "Sorry, something went wrong. Please try again.",
             group=group,
@@ -347,6 +371,22 @@ async def _respond(
         tg_message_id=sent[-1].message_id if sent else None,
         sender_tg_id=inbound.client.id,
         sender_name=bot_record.display_name,
+    )
+
+
+async def suggest_stronger_model(
+    inbound: Inbound, bot_record: BotRecord, payer: User, runtime: Runtime
+) -> None:
+    """The bot's recommended model is beyond the person's plan: say so, once ever."""
+    key = f"model-hint:{payer.id}:{bot_record.id}"
+    if not await runtime.redis.set(key, 1, nx=True):
+        return
+    await runtime.sender.send_text(
+        inbound.client,
+        inbound.chat_id,
+        t(lang_of(inbound.sender_language), "model.suggest"),
+        group=inbound.group,
+        reply_to=inbound.message_id if inbound.group else None,
     )
 
 

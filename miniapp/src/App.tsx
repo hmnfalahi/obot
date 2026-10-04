@@ -3,6 +3,7 @@ import { api, type Lang, type Me } from './api'
 import { I18n, translator } from './i18n'
 import { BotPage } from './pages/BotPage'
 import { BotsPage } from './pages/BotsPage'
+import { MySettingsPage } from './pages/MySettingsPage'
 import { NewBotPage } from './pages/NewBotPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TasksPage } from './pages/TasksPage'
@@ -15,9 +16,13 @@ export type Route =
   | { page: 'new' }
   | { page: 'settings' }
   | { page: 'tasks' }
+  | { page: 'mine'; id: number }
 
-/** The factory opens one bot with ?bot=<id> (web_app button) or start_param "bot_<id>" (link). */
+/** The factory opens one bot with ?bot=<id> (web_app button) or start_param "bot_<id>" (link),
+ * and someone's own settings for a bot with ?mine=<id>. */
 function initialRoute(): Route {
+  const mine = Number(new URLSearchParams(window.location.search).get('mine'))
+  if (mine > 0) return { page: 'mine', id: mine }
   const fromQuery = new URLSearchParams(window.location.search).get('bot')
   const fromStart = /^bot_(\d+)$/.exec(startParam() ?? '')?.[1]
   const id = Number(fromQuery ?? fromStart)
@@ -62,7 +67,8 @@ export default function App() {
   let content
   if (error) content = <ErrorBox message={error} onRetry={loadMe} />
   else if (!me) content = <Loading />
-  else if (route.page === 'bot') content = <BotPage id={route.id} me={me} />
+  else if (route.page === 'bot') content = <BotPage id={route.id} me={me} navigate={setRoute} />
+  else if (route.page === 'mine') content = <MySettingsPage id={route.id} navigate={setRoute} />
   else if (route.page === 'new') content = <NewBotPage onDone={() => setRoute({ page: 'bots' })} />
   else if (route.page === 'settings') content = <SettingsPage me={me} onChange={setMe} />
   else if (route.page === 'tasks') content = <TasksPage me={me} />

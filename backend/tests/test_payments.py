@@ -80,22 +80,19 @@ async def test_api_lists_packages(api) -> None:
     assert [p["id"] for p in response.json()] == ["s50", "s250", "s1000"]
 
 
-async def test_strong_model_needs_paid_plan(api) -> None:
+async def test_any_owner_may_recommend_the_strong_model(api) -> None:
+    """Only a recommendation: each person gets it if their own plan allows it (SPEC 8.7)."""
     bot_id = await make_bot(api, ALICE, 11)
 
     free = await api.patch(
         f"/api/bots/{bot_id}", json={"model_tier": "strong"}, headers=auth(ALICE)
     )
-    assert free.status_code == 403
+    assert free.json()["model_tier"] == "strong"
 
     async with api.state.sessionmaker() as session:
         user = await get_or_create_user(session, ALICE["id"])
         user.plan = PAID_PLAN
         await session.commit()
-    paid = await api.patch(
-        f"/api/bots/{bot_id}", json={"model_tier": "strong"}, headers=auth(ALICE)
-    )
-    assert paid.json()["model_tier"] == "strong"
     me = await api.get("/api/me", headers=auth(ALICE))
     assert me.json()["model_tiers"] == ["cheap", "strong"]
 

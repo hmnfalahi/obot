@@ -143,7 +143,7 @@ async def test_update_bot(api) -> None:
             "description": "Daily dollar price",
             "system_prompt": "Be brief.",
             "tools": ["read_url", "memory"],
-            "daily_credit_cap": 500,
+            "recommended_model": "claude-sonnet-5.5",
         },
         headers=auth(ALICE),
     )
@@ -154,12 +154,12 @@ async def test_update_bot(api) -> None:
     assert bot["description"] == "Daily dollar price"
     assert bot["system_prompt"] == "Be brief."
     assert bot["tools"] == ["read_url", "memory"]
-    assert bot["daily_credit_cap"] == 500
+    assert bot["recommended_model"] == "claude-sonnet-5.5"
 
     cleared = await api.patch(
-        f"/api/bots/{bot_id}", json={"clear_daily_credit_cap": True}, headers=auth(ALICE)
+        f"/api/bots/{bot_id}", json={"recommended_model": " "}, headers=auth(ALICE)
     )
-    assert cleared.json()["daily_credit_cap"] is None
+    assert cleared.json()["recommended_model"] is None
 
 
 async def test_unknown_tool_is_rejected(api) -> None:

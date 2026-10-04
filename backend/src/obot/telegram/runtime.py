@@ -64,6 +64,10 @@ class Runtime:
         base = self.miniapp_url.rstrip("/")
         return f"{base}/?bot={bot_id}" if bot_id else f"{base}/"
 
+    def settings_url(self, bot_id: int) -> str | None:
+        """The panel page with one person's own settings for a bot (key, model, cap)."""
+        return f"{self.miniapp_url.rstrip('/')}/?mine={bot_id}" if self.miniapp_url else None
+
     async def launch_bot(self, token: str) -> None:
         await self.transport.start(Bot(token), self.bots_dispatcher)
 
