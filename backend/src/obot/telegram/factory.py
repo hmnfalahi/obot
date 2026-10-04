@@ -376,10 +376,17 @@ async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime)
     _, row = found
     target = await session.get(BotRecord, row.bot_id)
     draft = draft_of(row)
+    old_name = target.display_name
+    old_description = (target.persona or {}).get("description")
     await apply_draft(session, row, target)
     target.display_name = draft.name
     token = runtime.cipher.decrypt(target.token_encrypted, str(target.tg_bot_id))
-    await sync_profile(token, draft, set_name=True)
+    await sync_profile(
+        token,
+        draft,
+        set_name=draft.name != old_name,
+        set_description=draft.description != old_description,
+    )
     await query.answer()
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.answer(t(lang, "factory.saved", username=target.username))

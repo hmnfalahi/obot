@@ -12,16 +12,24 @@ SHORT_DESCRIPTION_LIMIT = 120
 NETWORK_ATTEMPTS = 3
 
 
-async def sync_profile(token: str, draft: BotDraft, *, set_name: bool) -> None:
-    """Show the draft on the bot's Telegram profile. Failures are logged, not raised."""
+async def sync_profile(
+    token: str, draft: BotDraft, *, set_name: bool, set_description: bool = True
+) -> None:
+    """Show the draft on the bot's Telegram profile. Failures are logged, not raised.
+
+    Only send what changed: Telegram rate-limits setMyName for hours.
+    """
+    if not (set_name or set_description):
+        return
     bot = Bot(token)
     try:
         for attempt in range(NETWORK_ATTEMPTS):
             try:
-                await bot.set_my_description(description=draft.description)
-                await bot.set_my_short_description(
-                    short_description=draft.description[:SHORT_DESCRIPTION_LIMIT]
-                )
+                if set_description:
+                    await bot.set_my_description(description=draft.description)
+                    await bot.set_my_short_description(
+                        short_description=draft.description[:SHORT_DESCRIPTION_LIMIT]
+                    )
                 if set_name:
                     await bot.set_my_name(name=draft.name)
                 break
