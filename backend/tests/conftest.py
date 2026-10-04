@@ -94,6 +94,13 @@ async def api(session, cipher, monkeypatch):
         return None
 
     monkeypatch.setattr(routes, "sync_profile", no_profile_sync)
+    access_synced: list[tuple[str, list[int]]] = []
+
+    async def record_access(factory, bot) -> bool:
+        access_synced.append((bot.visibility, [u["id"] for u in bot.allowed_users or []]))
+        return True
+
+    monkeypatch.setattr(routes, "sync_access", record_access)
     pricing = Pricing.load(PLANS_FILE)
     pricing.models["test"] = ModelPrice(input_per_mtok=1, output_per_mtok=1)
     state = ApiState(
@@ -109,6 +116,7 @@ async def api(session, cipher, monkeypatch):
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         client.state = state
+        client.access_synced = access_synced
         yield client
 
 

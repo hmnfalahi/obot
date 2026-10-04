@@ -15,7 +15,7 @@ import {
   type ToolName,
 } from '../api'
 import { formatDateTime, formatNumber, useI18n } from '../i18n'
-import { haptic, openTelegramLink } from '../telegram'
+import { confirm, haptic, openTelegramLink } from '../telegram'
 import { useLoad } from '../hooks'
 import { ErrorBox, Loading } from '../ui'
 
@@ -43,12 +43,80 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
         </div>
       )}
       <ProfileForm bot={data} me={me} onSaved={bot.set} />
+      <Access bot={data} me={me} onSaved={bot.set} />
       <OwnKey bot={data} onSaved={bot.set} />
       <Apis bot={data} me={me} onSaved={bot.set} />
       <Tasks bot={data} me={me} onChange={bot.reload} />
       <Chats bot={data} />
       <Usage id={id} />
     </>
+  )
+}
+
+function Access({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: BotDetail) => void }) {
+  const { t, lang } = useI18n()
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const update = async (body: Parameters<typeof api.updateBot>[1]) => {
+    setBusy(true)
+    setError(null)
+    try {
+      onSaved(await api.updateBot(bot.id, body))
+      haptic('success')
+    } catch (e) {
+      setError((e as Error).message)
+      haptic('error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const makePublic = async () => {
+    if (await confirm(t('publicConfirm'))) await update({ visibility: 'public' })
+  }
+
+  return (
+    <div className="card">
+      <div className="row between">
+        <strong>{t('access')}</strong>
+        <span className="badge">{t(`visibility.${bot.visibility}`)}</span>
+      </div>
+      <p className="hint">{t(`visibilityHint.${bot.visibility}`)}</p>
+      <p className="hint">{t('botStats', { users: formatNumber(bot.users_count, lang), groups: formatNumber(bot.groups_count, lang) })}</p>
+      {bot.visibility === 'private' ? (
+        <>
+          <label>{t('allowedUsers')}</label>
+          {bot.allowed_users.length === 0 && <p className="hint">{t('noAllowedUsers')}</p>}
+          {bot.allowed_users.map((u) => (
+            <div key={u.id} className="row between">
+              <span>{u.name}</span>
+              <button
+                className="btn secondary"
+                disabled={busy}
+                onClick={() => update({ allowed_user_ids: bot.allowed_users.filter((x) => x.id !== u.id).map((x) => x.id) })}
+              >
+                {t('delete')}
+              </button>
+            </div>
+          ))}
+          <button
+            className="btn secondary block"
+            onClick={() => openTelegramLink(`https://t.me/${me.factory_username}?start=access_${bot.id}`)}
+          >
+            {t('chooseAllowedUsers')}
+          </button>
+          <button className="btn block" disabled={busy} onClick={makePublic}>
+            {t('makePublic')}
+          </button>
+        </>
+      ) : (
+        <button className="btn secondary block" disabled={busy} onClick={() => update({ visibility: 'private' })}>
+          {t('makePrivate')}
+        </button>
+      )}
+      {error && <p className="error">{error}</p>}
+    </div>
   )
 }
 

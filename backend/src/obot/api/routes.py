@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload
 
 from obot.api.deps import ApiState, CurrentUser, OwnedApi, OwnedBot, OwnedTask, Session, State
 from obot.api.schemas import (
+    AllowedUserOut,
     ApiIn,
     ApiOut,
     BotDetail,
@@ -34,6 +35,7 @@ from obot.api.schemas import (
     UsageDay,
 )
 from obot.billing.usage import count_messages, start_of_day
+from obot.bots.access import sync_access
 from obot.bots.apis import ensure_room, list_endpoints, read_headers, write_endpoint
 from obot.bots.byok import clear_key, key_hint, read_key, set_key, uses_byok
 from obot.bots.users import bot_settings
@@ -42,7 +44,19 @@ from obot.core.byok import KeyCheckFailed
 from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
 from obot.core.fetch import FetchError, ensure_public_host
 from obot.crypto import TokenCipher
-from obot.db.models import ApiEndpoint, Bot, DraftState, Task, TaskRun, UsageEvent, UsageKind, User
+from obot.db.models import (
+    ApiEndpoint,
+    Bot,
+    BotChat,
+    BotUser,
+    BotVisibility,
+    DraftState,
+    Task,
+    TaskRun,
+    UsageEvent,
+    UsageKind,
+    User,
+)
 from obot.factory.designer import BotDraft
 from obot.factory.drafts import start_draft
 from obot.factory.links import create_link
@@ -91,6 +105,7 @@ async def _me(session: Session, state: State, user: User) -> MeOut:
             used=await _count_today(session, user, UsageKind.SEARCH),
             limit=plan.daily_web_searches,
         ),
+        factory_username=state.factory_username,
     )
 
 
@@ -126,6 +141,7 @@ def _summary(bot: Bot) -> BotSummary:
         description=persona.get("description", ""),
         tools=bot.tools or [],
         owner_started=bot.owner_started,
+        visibility=bot.visibility,
     )
 
 
@@ -186,12 +202,31 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
         ],
         # The owner's own cap: everyone else sets theirs (SPEC 8.7).
         daily_credit_cap=(await bot_settings(session, bot.owner, bot)).daily_credit_cap,
+        allowed_users=[AllowedUserOut(**u) for u in bot.allowed_users or []],
+        users_count=await session.scalar(
+            select(func.count()).where(BotUser.bot_id == bot.id, BotUser.left_at.is_(None))
+        ),
+        groups_count=await session.scalar(
+            select(func.count()).where(
+                BotChat.bot_id == bot.id,
+                BotChat.is_member.is_(True),
+                BotChat.chat_type.in_(("group", "supergroup")),
+            )
+        ),
         chats=[
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
             for m in await list_memberships(session, bot.id)
         ],
         tasks=[await _task_out(session, t, owner_tg_id) for t in await live_tasks(session, bot)],
     )
+
+
+async def _sync_access(state: ApiState, bot: Bot) -> bool:
+    factory = TelegramBot(state.factory_token)
+    try:
+        return await sync_access(factory, bot)
+    finally:
+        await factory.session.close()
 
 
 @router.get("/bots")
@@ -230,7 +265,19 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
         (await bot_settings(session, bot.owner, bot)).daily_credit_cap = None
     elif body.daily_credit_cap is not None:
         (await bot_settings(session, bot.owner, bot)).daily_credit_cap = body.daily_credit_cap
+    access_changed = False
+    if body.visibility is not None and body.visibility != bot.visibility:
+        bot.visibility = BotVisibility(body.visibility)
+        access_changed = True
+    if body.allowed_user_ids is not None:
+        keep = set(body.allowed_user_ids)
+        kept = [u for u in bot.allowed_users or [] if u["id"] in keep]
+        access_changed |= kept != (bot.allowed_users or [])
+        bot.allowed_users = kept
     await session.flush()
+    if access_changed and not await _sync_access(state, bot):
+        # Not committed: what we store must match what Telegram enforces.
+        raise HTTPException(502, "Telegram did not accept the access change; try again")
     if name_changed or description_changed:
         token = state.cipher.decrypt(bot.token_encrypted, str(bot.tg_bot_id))
         draft = BotDraft(

@@ -43,6 +43,13 @@ class BotStatus(enum.StrEnum):
     DISABLED = "disabled"
 
 
+class BotVisibility(enum.StrEnum):
+    # Only the owner and the people they add (SPEC 8.7).
+    PRIVATE = "private"
+    # Anyone who starts it.
+    PUBLIC = "public"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -76,6 +83,18 @@ class Bot(Base):
     byok_model: Mapped[str | None] = mapped_column(String(128))
     byok_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    visibility: Mapped[BotVisibility] = mapped_column(
+        Enum(
+            BotVisibility,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        default=BotVisibility.PRIVATE,
+        server_default=BotVisibility.PRIVATE.value,
+    )
+    # People a private bot is shared with: [{"id": tg user id, "name": str}], at most 10.
+    allowed_users: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
     status: Mapped[BotStatus] = mapped_column(
         Enum(
             BotStatus,

@@ -24,6 +24,8 @@ class MeOut(BaseModel):
     max_apis: int
     messages_today: Quota
     searches_today: Quota
+    # For t.me links that continue in the factory chat.
+    factory_username: str
 
 
 class MeUpdate(BaseModel):
@@ -39,6 +41,12 @@ class BotSummary(BaseModel):
     description: str
     tools: list[str]
     owner_started: bool
+    visibility: Literal["private", "public"]
+
+
+class AllowedUserOut(BaseModel):
+    id: int
+    name: str
 
 
 class ChatOut(BaseModel):
@@ -109,6 +117,10 @@ class BotDetail(BotSummary):
     byok: ByokOut | None
     apis: list[ApiOut]
     daily_credit_cap: int | None
+    allowed_users: list[AllowedUserOut]
+    # How many people use the bot and in how many groups; never what they say (SPEC 8.7).
+    users_count: int
+    groups_count: int
     chats: list[ChatOut]
     tasks: list[TaskOut]
 
@@ -136,6 +148,9 @@ class BotUpdate(BaseModel):
     model_tier: Literal["cheap", "strong"] | None = None
     daily_credit_cap: int | None = Field(default=None, ge=0)
     clear_daily_credit_cap: bool = False
+    visibility: Literal["private", "public"] | None = None
+    # People to keep sharing a private bot with; adding people goes through the factory.
+    allowed_user_ids: list[int] | None = None
 
 
 class TaskRequest(BaseModel):

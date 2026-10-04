@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction, ChatType, ParseMode
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.methods import GetManagedBotToken
 from aiogram.types import (
     CallbackQuery,
@@ -14,6 +14,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     KeyboardButtonRequestManagedBot,
+    KeyboardButtonRequestUsers,
     ManagedBotUpdated,
     Message,
     ReplyKeyboardMarkup,
@@ -23,6 +24,7 @@ from aiogram.types import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from obot.bots.access import MAX_ALLOWED_USERS, sync_access
 from obot.bots.service import (
     ManagedBotInfo,
     RegisterOutcome,
@@ -31,7 +33,7 @@ from obot.bots.service import (
     register_managed_bot,
 )
 from obot.db.models import Bot as BotRecord
-from obot.db.models import BotStatus, DraftKind, DraftState, FactoryDraft, User
+from obot.db.models import BotStatus, BotVisibility, DraftKind, DraftState, FactoryDraft, User
 from obot.factory.designer import BotDraft, design
 from obot.factory.drafts import (
     apply_draft,
@@ -151,10 +153,68 @@ async def _sync_and_report(
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, session: AsyncSession) -> None:
+async def on_start(message: Message, command: CommandObject, session: AsyncSession) -> None:
     user = message.from_user
-    await get_or_create_user(session, user.id, user.language_code)
-    await message.answer(t(lang_of(user.language_code), "factory.welcome"))
+    owner = await get_or_create_user(session, user.id, user.language_code)
+    lang = lang_of(user.language_code)
+    # The panel sends owners here to choose who may use a private bot: start=access_<bot id>
+    if (command.args or "").startswith("access_"):
+        await ask_for_people(message, session, owner, lang, command.args.removeprefix("access_"))
+        return
+    await message.answer(t(lang, "factory.welcome"))
+
+
+async def _owned_bot(session: AsyncSession, owner: User, bot_id: int) -> BotRecord | None:
+    record = await session.get(BotRecord, bot_id)
+    return record if record is not None and record.owner_id == owner.id else None
+
+
+async def ask_for_people(
+    message: Message, session: AsyncSession, owner: User, lang: str, bot_id: str
+) -> None:
+    record = await _owned_bot(session, owner, int(bot_id)) if bot_id.isdigit() else None
+    if record is None:
+        await message.answer(t(lang, "access.unknown_bot"))
+        return
+    picker = KeyboardButton(
+        text=t(lang, "btn.pick_people"),
+        request_users=KeyboardButtonRequestUsers(
+            request_id=record.id,
+            user_is_bot=False,
+            max_quantity=MAX_ALLOWED_USERS,
+            request_name=True,
+        ),
+    )
+    await message.answer(
+        t(lang, "access.pick", limit=MAX_ALLOWED_USERS, username=record.username),
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[picker]], resize_keyboard=True, one_time_keyboard=True
+        ),
+    )
+
+
+@router.message(F.users_shared)
+async def on_people_shared(message: Message, bot: Bot, session: AsyncSession) -> None:
+    """The owner chose who may use one of their private bots (replaces the list)."""
+    lang = lang_of(message.from_user.language_code)
+    owner = await get_or_create_user(session, message.from_user.id)
+    shared = message.users_shared
+    record = await _owned_bot(session, owner, shared.request_id)
+    if record is None:
+        await message.answer(t(lang, "access.unknown_bot"), reply_markup=ReplyKeyboardRemove())
+        return
+    record.allowed_users = [
+        {"id": u.user_id, "name": " ".join(filter(None, (u.first_name, u.last_name))) or "?"}
+        for u in shared.users[:MAX_ALLOWED_USERS]
+        if u.user_id != message.from_user.id
+    ]
+    await session.flush()
+    synced = record.visibility != BotVisibility.PRIVATE or await sync_access(bot, record)
+    names = ", ".join(u["name"] for u in record.allowed_users) or "—"
+    text = t(lang, "access.saved", username=record.username, names=names)
+    if not synced:
+        text += "\n\n" + t(lang, "access.not_synced")
+    await message.answer(text, reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(Command("mybots"))
@@ -419,6 +479,8 @@ async def on_managed_bot(
             # Keep the name the user confirmed in Telegram's creation dialog.
             result.bot.display_name = update.bot_user.first_name
             await sync_profile(result.token, created_draft, set_name=False)
+        # New bots are private until their owner shares them (SPEC 8.7).
+        await sync_access(bot, result.bot)
 
     if not result.should_run:
         await runtime.stop_bot(update.bot_user.id)

@@ -21,6 +21,7 @@ export interface Me {
   max_apis: number
   messages_today: Quota
   searches_today: Quota
+  factory_username: string
 }
 
 export interface BotSummary {
@@ -31,6 +32,7 @@ export interface BotSummary {
   description: string
   tools: ToolName[]
   owner_started: boolean
+  visibility: Visibility
 }
 
 export interface Chat {
@@ -99,7 +101,17 @@ export interface ApiIn {
   headers?: Record<string, string>
 }
 
+export type Visibility = 'private' | 'public'
+
+export interface AllowedUser {
+  id: number
+  name: string
+}
+
 export interface BotDetail extends BotSummary {
+  allowed_users: AllowedUser[]
+  users_count: number
+  groups_count: number
   system_prompt: string
   language: string
   model_tier: string
@@ -119,6 +131,8 @@ export interface BotUpdate {
   model_tier?: 'cheap' | 'strong'
   daily_credit_cap?: number
   clear_daily_credit_cap?: boolean
+  visibility?: Visibility
+  allowed_user_ids?: number[]
 }
 
 export interface UsageDay {
