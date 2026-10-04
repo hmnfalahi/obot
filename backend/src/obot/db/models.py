@@ -150,7 +150,7 @@ class UsageKind(enum.StrEnum):
 
 
 class ApiEndpoint(Base):
-    """An HTTP endpoint of the owner that a bot may call; see obot.core.custom_api."""
+    """An HTTP endpoint a bot may call, defined by its owner; see obot.core.custom_api."""
 
     __tablename__ = "api_endpoints"
     __table_args__ = (UniqueConstraint("bot_id", "name"),)
@@ -161,9 +161,22 @@ class ApiEndpoint(Base):
     description: Mapped[str] = mapped_column(String(500))
     method: Mapped[str] = mapped_column(String(8))
     url: Mapped[str] = mapped_column(String(2048))
-    # JSON object of secret headers, AES-GCM encrypted and bound to the bot; see obot.bots.apis
-    headers_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Header templates, not secret: "{name}" slots take each person's own key.
+    headers: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class ApiKeyValue(Base):
+    """One person's value for a key slot of a bot's endpoints; see obot.bots.apis."""
+
+    __tablename__ = "api_key_values"
+    __table_args__ = (UniqueConstraint("user_id", "bot_id", "name"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(40))
+    value_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class UsageEvent(Base):

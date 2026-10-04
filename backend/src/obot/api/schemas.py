@@ -102,6 +102,15 @@ class WalletKeyIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=512)
 
 
+class ApiKeyStatus(BaseModel):
+    name: str
+    is_set: bool
+
+
+class ApiKeyIn(BaseModel):
+    value: str = Field(min_length=1, max_length=2000)
+
+
 class MySettingsOut(BaseModel):
     """One person's own settings for a bot they use (SPEC 8.7)."""
 
@@ -116,6 +125,8 @@ class MySettingsOut(BaseModel):
     model: str | None
     daily_credit_cap: int | None
     wallet: list[Provider]
+    # Keys the bot's APIs need from each user, and whether this user set them.
+    api_keys: list[ApiKeyStatus]
 
 
 class MySettingsIn(BaseModel):
@@ -131,8 +142,9 @@ class ApiOut(BaseModel):
     description: str
     method: str
     url: str
-    # Values are secret and never sent back.
-    header_names: list[str]
+    # Templates, not secret: {name} slots take each user's own key.
+    headers: dict[str, str]
+    key_slots: list[str]
 
 
 class ApiIn(BaseModel):
@@ -140,8 +152,8 @@ class ApiIn(BaseModel):
     description: str = Field(min_length=1, max_length=500)
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     url: str = Field(min_length=8, max_length=2048)
-    # Omitted on update: keep the stored headers.
-    headers: dict[str, str] | None = None
+    # Values may name key slots like "Bearer {shop_token}"; never put a real key here.
+    headers: dict[str, str] = Field(default_factory=dict)
 
 
 class BotDetail(BotSummary):

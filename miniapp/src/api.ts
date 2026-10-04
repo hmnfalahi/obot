@@ -101,6 +101,7 @@ export interface MySettings {
   model: string | null
   daily_credit_cap: number | null
   wallet: Provider[]
+  api_keys: { name: string; is_set: boolean }[]
 }
 
 export interface MySettingsIn {
@@ -118,7 +119,9 @@ export interface ApiEndpoint {
   description: string
   method: HttpMethod
   url: string
-  header_names: string[]
+  /** Templates, not secret: {name} slots take each user's own key. */
+  headers: Record<string, string>
+  key_slots: string[]
 }
 
 export interface ApiIn {
@@ -126,8 +129,8 @@ export interface ApiIn {
   description: string
   method: HttpMethod
   url: string
-  /** Omit on update to keep the stored (secret) headers. */
-  headers?: Record<string, string>
+  /** Values may name key slots like "Bearer {shop_token}"; never a real key. */
+  headers: Record<string, string>
 }
 
 export type Visibility = 'private' | 'public'
@@ -234,6 +237,10 @@ export const api = {
   deleteKey: (provider: Provider) => request<WalletKey[]>('DELETE', `/keys/${provider}`),
   mine: (botId: number) => request<MySettings>('GET', `/bots/${botId}/mine`),
   putMine: (botId: number, body: MySettingsIn) => request<MySettings>('PUT', `/bots/${botId}/mine`, body),
+  putApiKey: (botId: number, name: string, value: string) =>
+    request<MySettings>('PUT', `/bots/${botId}/mine/keys/${name}`, { value }),
+  deleteApiKey: (botId: number, name: string) =>
+    request<MySettings>('DELETE', `/bots/${botId}/mine/keys/${name}`),
   addApi: (botId: number, body: ApiIn) => request<BotDetail>('POST', `/bots/${botId}/apis`, body),
   updateApi: (id: number, body: ApiIn) => request<BotDetail>('PUT', `/apis/${id}`, body),
   deleteApi: (id: number) => request<BotDetail>('DELETE', `/apis/${id}`),

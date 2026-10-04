@@ -108,6 +108,65 @@ function Form({
         </button>
         {!['idle', 'saving', 'saved'].includes(status) && <p className="error">{status}</p>}
       </div>
+      {settings.api_keys.length > 0 && <ApiKeys settings={settings} onSaved={onSaved} />}
+    </>
+  )
+}
+
+/** The user's own values for the keys this bot's APIs need; never shown again once saved. */
+function ApiKeys({ settings, onSaved }: { settings: MySettings; onSaved: (s: MySettings) => void }) {
+  const { t } = useI18n()
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async (action: () => Promise<MySettings>) => {
+    setError(null)
+    try {
+      onSaved(await action())
+      setValues({})
+      haptic('success')
+    } catch (e) {
+      setError((e as Error).message)
+      haptic('error')
+    }
+  }
+
+  return (
+    <>
+      <h2>{t('apiKeys')}</h2>
+      <div className="card">
+        <p className="hint">{t('apiKeysHint')}</p>
+        {settings.api_keys.map((k) => (
+          <div key={k.name}>
+            <label dir="ltr">
+              {k.name} {k.is_set ? '✅' : ''}
+            </label>
+            <div className="row">
+              <input
+                dir="ltr"
+                type="password"
+                autoComplete="off"
+                placeholder={k.is_set ? t('apiKeyIsSet') : ''}
+                value={values[k.name] ?? ''}
+                onChange={(e) => setValues({ ...values, [k.name]: e.target.value })}
+              />
+              <button
+                className="btn"
+                disabled={!(values[k.name] ?? '').trim()}
+                onClick={() => run(() => api.putApiKey(settings.bot_id, k.name, values[k.name].trim()))}
+              >
+                {t('save')}
+              </button>
+              {k.is_set && (
+                <button className="btn danger" onClick={() => run(() => api.deleteApiKey(settings.bot_id, k.name))}>
+                  {t('delete')}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {error && <p className="error">{error}</p>}
+      </div>
     </>
   )
 }

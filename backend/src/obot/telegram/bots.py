@@ -27,6 +27,7 @@ from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
 from obot.telegram.addressing import is_addressed, strip_mention
+from obot.telegram.api_keys import KeyRequester
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.runtime import Runtime
 from obot.telegram.scheduling import Scheduler
@@ -313,7 +314,12 @@ async def _respond(
                 runtime, bot_record, payer, inbound.client, lang_of(inbound.sender_language)
             )
         )
-        kit = await toolkit(session, runtime, bot_record, now, payer, schedule=schedule)
+        ask_for_keys = KeyRequester(
+            runtime, bot_record, inbound.client, inbound.chat_id, lang_of(inbound.sender_language)
+        )
+        kit = await toolkit(
+            session, runtime, bot_record, now, payer, schedule=schedule, ask_for_keys=ask_for_keys
+        )
         reply = await generate_reply(
             chosen.model,
             profile,
