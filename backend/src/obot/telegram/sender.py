@@ -10,7 +10,7 @@ import time
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.types import Message, ReplyParameters
+from aiogram.types import InlineKeyboardMarkup, Message, ReplyParameters
 from redis.asyncio import Redis
 
 log = logging.getLogger(__name__)
@@ -47,17 +47,27 @@ class Sender:
         self._private_limit = private_per_minute
 
     async def send_text(
-        self, bot: Bot, chat_id: int, text: str, *, group: bool, reply_to: int | None = None
+        self,
+        bot: Bot,
+        chat_id: int,
+        text: str,
+        *,
+        group: bool,
+        reply_to: int | None = None,
+        buttons: InlineKeyboardMarkup | None = None,
     ) -> list[Message]:
+        """Send `text`, split if needed; `buttons` go under the last part."""
         sent = []
-        for i, chunk in enumerate(split_text(text)):
+        chunks = split_text(text)
+        for i, chunk in enumerate(chunks):
             await self.acquire(bot.id, chat_id, group)
             reply = (
                 ReplyParameters(message_id=reply_to, allow_sending_without_reply=True)
                 if reply_to and i == 0
                 else None
             )
-            sent.append(await self._send(bot, chat_id, chunk, reply))
+            markup = buttons if i == len(chunks) - 1 else None
+            sent.append(await self._send(bot, chat_id, chunk, reply, markup))
         return sent
 
     async def acquire(self, bot_id: int, chat_id: int, group: bool) -> None:
@@ -78,11 +88,18 @@ class Sender:
             await asyncio.sleep(wait)
 
     async def _send(
-        self, bot: Bot, chat_id: int, text: str, reply: ReplyParameters | None
+        self,
+        bot: Bot,
+        chat_id: int,
+        text: str,
+        reply: ReplyParameters | None,
+        buttons: InlineKeyboardMarkup | None = None,
     ) -> Message:
         for attempt in range(MAX_FLOOD_RETRIES + 1):
             try:
-                return await bot.send_message(chat_id, text, reply_parameters=reply)
+                return await bot.send_message(
+                    chat_id, text, reply_parameters=reply, reply_markup=buttons
+                )
             except TelegramRetryAfter as e:
                 if attempt == MAX_FLOOD_RETRIES:
                     raise

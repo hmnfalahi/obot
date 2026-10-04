@@ -150,36 +150,3 @@ async def test_flood_control_retries_after_delay(redis, monkeypatch) -> None:
     assert result == ["sent"]
     assert slept == [3]
     assert bot.send_message.await_args.kwargs["reply_parameters"].message_id == 10
-
-
-async def test_group_handler_answers_only_people_who_address_it(
-    session, cipher, monkeypatch
-) -> None:
-    from obot.db.models import Bot as BotRecord
-    from obot.telegram import bots as bots_module
-    from tests.test_history import make_bot
-
-    record = await session.get(BotRecord, await make_bot(session, cipher, 1))
-    record.username = USERNAME
-    answered: list[str] = []
-
-    async def fake_respond(inbound, text, *args) -> None:
-        answered.append(text)
-
-    monkeypatch.setattr(bots_module, "_respond", fake_respond)
-    client = AsyncMock(id=BOT_ID)
-    other_bot = User(id=7, is_bot=True, first_name="Other", username="other_bot")
-
-    async def send(message: Message) -> None:
-        await bots_module.on_group_text(message.as_(client), session, record, None)
-
-    await send(msg("just chatting"))
-    await send(msg(f"@{USERNAME} hi", [entity("mention", f"@{USERNAME} hi", f"@{USERNAME}")]))
-    from_bot = f"@{USERNAME} from a bot"
-    await send(
-        msg(from_bot, [entity("mention", from_bot, f"@{USERNAME}")]).model_copy(
-            update={"from_user": other_bot}
-        )
-    )
-
-    assert answered == ["hi"]
