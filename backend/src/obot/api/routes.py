@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot as TelegramBot
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.orm import joinedload
 
@@ -40,7 +40,6 @@ from obot.chat.membership import list_memberships
 from obot.core.byok import KeyCheckFailed
 from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
 from obot.core.fetch import FetchError, ensure_public_host
-from obot.core.rules import parse_rules
 from obot.crypto import TokenCipher
 from obot.db.models import ApiEndpoint, Bot, DraftState, Task, TaskRun, UsageEvent, UsageKind, User
 from obot.factory.designer import BotDraft
@@ -48,9 +47,8 @@ from obot.factory.drafts import start_draft
 from obot.factory.links import create_link
 from obot.i18n import lang_of
 from obot.tasks.apply import PlanningFailed, add_tasks
-from obot.tasks.events import HookRejected, accept_webhook
 from obot.tasks.schedule import InvalidSchedule, zone
-from obot.tasks.service import cancel_task, hook_url, live_tasks, set_paused
+from obot.tasks.service import cancel_task, live_tasks, set_paused
 from obot.telegram.payments import invoice_args
 from obot.telegram.profile import sync_profile
 
@@ -130,9 +128,7 @@ def _summary(bot: Bot) -> BotSummary:
     )
 
 
-async def _task_out(
-    session: Session, task: Task, owner_tg_id: int, public_url: str | None = None
-) -> TaskOut:
+async def _task_out(session: Session, task: Task, owner_tg_id: int) -> TaskOut:
     last_error = await session.scalar(
         select(TaskRun.error).where(TaskRun.task_id == task.id).order_by(TaskRun.id.desc()).limit(1)
     )
@@ -145,8 +141,6 @@ async def _task_out(
         id=task.id,
         summary=task.summary,
         instruction=task.instruction,
-        trigger=task.trigger,
-        hook_url=hook_url(public_url, task) if public_url and task.hook_secret else None,
         schedule_kind=task.schedule_kind,
         cron=task.cron,
         timezone=task.timezone,
@@ -172,10 +166,8 @@ def _byok(cipher: TokenCipher, bot: Bot) -> ByokOut | None:
 async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
     persona = bot.persona or {}
     owner_tg_id = bot.owner.tg_user_id
-    public_url = state.public_url
     return BotDetail(
         **_summary(bot).model_dump(),
-        reply_rules=parse_rules(bot.reply_rules or []),
         system_prompt=persona.get("system_prompt", ""),
         language=persona.get("language", "fa"),
         model_tier=bot.model_tier,
@@ -196,10 +188,7 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
             for m in await list_memberships(session, bot.id)
         ],
-        tasks=[
-            await _task_out(session, t, owner_tg_id, public_url)
-            for t in await live_tasks(session, bot)
-        ],
+        tasks=[await _task_out(session, t, owner_tg_id) for t in await live_tasks(session, bot)],
     )
 
 
@@ -231,12 +220,6 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
     bot.persona = persona
     if body.tools is not None:
         bot.tools = [t.value for t in body.tools]
-    if body.reply_rules is not None:
-        bot.reply_rules = [
-            r.model_dump(mode="json", exclude_defaults=True)
-            for r in body.reply_rules
-            if r.is_complete()
-        ]
     if body.model_tier is not None:
         if body.model_tier not in state.pricing.plan(bot.owner.plan).model_tiers:
             raise HTTPException(403, "this model needs the paid plan")
@@ -414,22 +397,6 @@ async def create_invoice(body: InvoiceIn, user: CurrentUser, state: State) -> In
     return InvoiceOut(link=link)
 
 
-# --- incoming webhooks (WEBHOOK-triggered tasks) ---------------------------------------------
-
-MAX_HOOK_BODY_BYTES = 10_000
-
-
-@router.post("/hooks/{task_id}/{secret}", status_code=202)
-async def incoming_hook(task_id: int, secret: str, request: Request, session: Session) -> dict:
-    """Public endpoint: the secret in the URL is the only credential."""
-    body = (await request.body())[:MAX_HOOK_BODY_BYTES].decode("utf-8", errors="replace")
-    try:
-        await accept_webhook(session, task_id, secret, body or "(empty request)")
-    except HookRejected as e:
-        raise HTTPException(e.status, str(e)) from e
-    return {"status": "queued"}
-
-
 # --- tasks ------------------------------------------------------------------------------------
 
 
@@ -442,15 +409,12 @@ async def add_task(body: TaskRequest, bot: OwnedBot, session: Session, state: St
             state.models.for_tier("cheap"),
             bot,
             [body.request],
-            public_url=state.public_url,
         )
     except PlanningFailed as e:
         raise HTTPException(502, "could not understand the task; please rephrase") from e
     owner_tg_id = bot.owner.tg_user_id
     return TaskAddOut(
-        scheduled=[
-            await _task_out(session, t, owner_tg_id, state.public_url) for t in sync.scheduled
-        ],
+        scheduled=[await _task_out(session, t, owner_tg_id) for t in sync.scheduled],
         rejected=[RejectedOut(summary=r.summary, reason=r.reason) for r in sync.rejected],
     )
 

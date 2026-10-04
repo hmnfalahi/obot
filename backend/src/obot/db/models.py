@@ -76,8 +76,6 @@ class Bot(Base):
     byok_model: Mapped[str | None] = mapped_column(String(128))
     byok_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
-    # Group reply rules; see obot.core.rules
-    reply_rules: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
     daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[BotStatus] = mapped_column(
         Enum(
@@ -287,23 +285,8 @@ class ScheduleKind(enum.StrEnum):
     ONCE = "once"
 
 
-class TriggerKind(enum.StrEnum):
-    SCHEDULE = "schedule"  # cron or one-off time
-    # Watchers: polled every trigger_config["every_minutes"] minutes.
-    RSS = "rss"  # a new item in a feed
-    PAGE_CHANGE = "page_change"  # the text of a page changed
-    PRICE = "price"  # a number on a page crossed a threshold
-    # Push: fired by an event as it happens.
-    GROUP_KEYWORD = "group_keyword"
-    NEW_MEMBER = "new_member"
-    WEBHOOK = "webhook"
-
-
-WATCHER_TRIGGERS = (TriggerKind.RSS, TriggerKind.PAGE_CHANGE, TriggerKind.PRICE)
-
-
 class Task(Base):
-    """A job of a bot: when its trigger fires, the agent follows `instruction`."""
+    """A scheduled job of a bot: at each run the agent follows `instruction`."""
 
     __tablename__ = "tasks"
     __table_args__ = (
@@ -315,27 +298,10 @@ class Task(Base):
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
     instruction: Mapped[str] = mapped_column(Text)
     summary: Mapped[str] = mapped_column(String(256))
-    trigger: Mapped[TriggerKind] = mapped_column(
-        Enum(
-            TriggerKind,
-            native_enum=False,
-            length=16,
-            values_callable=lambda e: [m.value for m in e],
-        ),
-        default=TriggerKind.SCHEDULE,
-        server_default=TriggerKind.SCHEDULE.value,
-    )
-    # Trigger parameters (url, keywords, chat_id, threshold...) and what watchers
-    # remember between polls (seen feed items, page hash, last price side).
-    trigger_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    trigger_state: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     # A chain: [{"instruction": str, "bot_id": int | None}, ...] run in order, each step's
     # output feeding the next; bot_id None is this bot. Empty for a single-step task.
     steps: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
-    # Secret part of the webhook URL of WEBHOOK tasks.
-    hook_secret: Mapped[str | None] = mapped_column(String(64))
-    # Only for SCHEDULE tasks.
-    schedule_kind: Mapped[ScheduleKind | None] = mapped_column(
+    schedule_kind: Mapped[ScheduleKind] = mapped_column(
         Enum(
             ScheduleKind,
             native_enum=False,
@@ -423,16 +389,3 @@ class Payment(Base):
     telegram_charge_id: Mapped[str] = mapped_column(String(128), unique=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     refunded_at: Mapped[datetime | None]
-
-
-class TaskEvent(Base):
-    """A fired trigger waiting to be run, from any process (bots, API webhooks, watchers)."""
-
-    __tablename__ = "task_events"
-    __table_args__ = (Index("ix_task_events_pending", "processed_at", "id"),)
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
-    payload: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    processed_at: Mapped[datetime | None]

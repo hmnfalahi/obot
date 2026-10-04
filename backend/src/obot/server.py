@@ -46,7 +46,6 @@ async def lifespan(app) -> AsyncIterator[None]:
         models=runtime.models,
         factory_token=settings.factory_bot_token.get_secret_value(),
         factory_username=services.factory_username,
-        public_url=runtime.public_url,
     )
     yield
     await stop_services(services)

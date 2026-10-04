@@ -34,14 +34,13 @@ async def sync_tasks(
     model: Model,
     bot: Bot,
     requests: list[str],
-    public_url: str | None = None,
 ) -> TaskSync:
     """Replace the bot's scheduled tasks with the ones described in `requests`."""
     if not requests:
         await replace_bot_tasks(session, bot, [])
         return TaskSync()
     already_live = await count_live_tasks(session, bot.owner, exclude_bot=bot)
-    sync = await _plan(session, pricing, model, bot, requests, already_live, public_url)
+    sync = await _plan(session, pricing, model, bot, requests, already_live)
     await replace_bot_tasks(session, bot, sync.scheduled)
     log.info(
         "tasks of bot %s replaced: %d scheduled, %d rejected",
@@ -58,11 +57,10 @@ async def add_tasks(
     model: Model,
     bot: Bot,
     requests: list[str],
-    public_url: str | None = None,
 ) -> TaskSync:
     """Add tasks to the bot's existing ones (mini app)."""
     already_live = await count_live_tasks(session, bot.owner)
-    sync = await _plan(session, pricing, model, bot, requests, already_live, public_url)
+    sync = await _plan(session, pricing, model, bot, requests, already_live)
     session.add_all(sync.scheduled)
     await session.flush()
     return sync
@@ -75,7 +73,6 @@ async def _plan(
     bot: Bot,
     requests: list[str],
     already_live: int,
-    public_url: str | None,
 ) -> TaskSync:
     now = datetime.now(UTC)
     owner = bot.owner
@@ -120,7 +117,6 @@ async def _plan(
         pricing.plan(owner.plan),
         already_live,
         now,
-        public_url=public_url,
         peers=peers,
     )
     return TaskSync(tasks, rejected)

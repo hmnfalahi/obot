@@ -31,15 +31,13 @@ from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.polling import PollingManager
 from obot.telegram.runtime import Runtime
 from obot.telegram.sender import Sender
-from obot.telegram.task_runner import run_due_tasks, run_task_events
+from obot.telegram.task_runner import run_due_tasks
 from obot.telegram.updates import UpdateQueue
 from obot.telegram.webhook import WebhookManager
 
 log = logging.getLogger(__name__)
 
 Mode = Literal["polling", "webhook"]
-# How often fired triggers (webhooks, group events, watchers) are picked up.
-TASK_EVENT_POLL_SECONDS = 5
 REQUIRED_SETTINGS = ("factory_bot_token", "token_encryption_key", "openrouter_api_key")
 
 
@@ -122,7 +120,6 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
         sender=Sender(redis),
         embedder=Embedder(models.client, settings.embedding_model),
         miniapp_url=settings.miniapp_url,
-        public_url=settings.public_base_url or settings.miniapp_url,
         admins=settings.admins,
         manual_payment_text=settings.manual_payment_text,
         tavily_api_key=(
@@ -171,9 +168,6 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
     services = Services(runtime, factory_bot, me.username, factory_dispatcher, engine, updates)
     services.jobs = [
         asyncio.create_task(run_every("scheduled-tasks", 60, lambda: run_due_tasks(runtime))),
-        asyncio.create_task(
-            run_every("task-events", TASK_EVENT_POLL_SECONDS, lambda: run_task_events(runtime))
-        ),
         asyncio.create_task(
             run_every(
                 "memory-extraction",

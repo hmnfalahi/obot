@@ -22,7 +22,6 @@ class ApiState:
     models: ModelRegistry
     factory_token: str
     factory_username: str
-    public_url: str | None = None
 
 
 def get_state(request: Request) -> ApiState:
