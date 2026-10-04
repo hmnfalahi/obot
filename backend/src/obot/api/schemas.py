@@ -72,14 +72,20 @@ class StepOut(BaseModel):
 
 
 class TaskOut(BaseModel):
+    """One of the user's own tasks (SPEC 8.7)."""
+
     id: int
+    bot_id: int
+    bot_username: str
     summary: str
     instruction: str
     schedule_kind: str
     cron: str | None
     timezone: str
     destination_chat_id: int
-    to_owner: bool
+    # Sent to the user's own chat with the bot; else to destination_title's group or channel.
+    to_me: bool
+    destination_title: str | None
     status: str
     next_run_at: datetime | None
     last_run_at: datetime | None
@@ -131,7 +137,6 @@ class BotDetail(BotSummary):
     users_count: int
     groups_count: int
     chats: list[ChatOut]
-    tasks: list[TaskOut]
 
 
 class PackageOut(BaseModel):
@@ -160,20 +165,6 @@ class BotUpdate(BaseModel):
     visibility: Literal["private", "public"] | None = None
     # People to keep sharing a private bot with; adding people goes through the factory.
     allowed_user_ids: list[int] | None = None
-
-
-class TaskRequest(BaseModel):
-    request: str = Field(min_length=3, max_length=500)
-
-
-class RejectedOut(BaseModel):
-    summary: str
-    reason: str
-
-
-class TaskAddOut(BaseModel):
-    scheduled: list[TaskOut]
-    rejected: list[RejectedOut]
 
 
 class TaskUpdate(BaseModel):

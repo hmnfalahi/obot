@@ -50,13 +50,17 @@ export interface TaskStep {
 
 export interface Task {
   id: number
+  bot_id: number
+  bot_username: string
   summary: string
   instruction: string
   schedule_kind: 'cron' | 'once'
   cron: string | null
   timezone: string
   destination_chat_id: number
-  to_owner: boolean
+  /** Sent to the user's own chat with the bot; else to destination_title. */
+  to_me: boolean
+  destination_title: string | null
   status: 'active' | 'waiting_start' | 'paused' | 'done' | 'cancelled'
   next_run_at: string | null
   last_run_at: string | null
@@ -127,7 +131,6 @@ export interface BotDetail extends BotSummary {
   apis: ApiEndpoint[]
   daily_credit_cap: number | null
   chats: Chat[]
-  tasks: Task[]
 }
 
 export interface BotUpdate {
@@ -147,11 +150,6 @@ export interface UsageDay {
   day: string
   messages: number
   credits: number
-}
-
-export interface TaskAdd {
-  scheduled: Task[]
-  rejected: { summary: string; reason: string }[]
 }
 
 export interface NewBot {
@@ -212,8 +210,7 @@ export const api = {
   updateApi: (id: number, body: ApiIn) => request<BotDetail>('PUT', `/apis/${id}`, body),
   deleteApi: (id: number) => request<BotDetail>('DELETE', `/apis/${id}`),
   usage: (id: number, days = 7) => request<UsageDay[]>('GET', `/bots/${id}/usage?days=${days}`),
-  addTask: (id: number, text: string) =>
-    request<TaskAdd>('POST', `/bots/${id}/tasks`, { request: text }),
+  tasks: () => request<Task[]>('GET', '/tasks'),
   pauseTask: (id: number, paused: boolean) => request<Task>('PATCH', `/tasks/${id}`, { paused }),
   deleteTask: (id: number) => request<void>('DELETE', `/tasks/${id}`),
   packages: () => request<StarPackage[]>('GET', '/billing/packages'),

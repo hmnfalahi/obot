@@ -1,5 +1,6 @@
 """Everything a bot's agent run needs besides the model: tools, their services, notes."""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -36,11 +37,13 @@ async def toolkit(
     *,
     delegation: bool = True,
     note: str | None = None,
+    schedule: Callable[[str], Awaitable[str]] | None = None,
 ) -> Toolkit:
     """The bot's tools, metered against `payer` (whoever started the request).
 
     The bot may consult the payer's other bots (ask_bot) unless `delegation` is False: a
-    bot answering for another must not delegate again.
+    bot answering for another must not delegate again. `schedule` (private chats only)
+    lets it draft scheduled tasks for the payer.
     """
     apis = await load_endpoints(session, runtime.cipher, bot)
     services = ToolServices(
@@ -48,12 +51,18 @@ async def toolkit(
         meter=UsageMeter(session, runtime.pricing, payer, bot, now),
         tavily_api_key=runtime.tavily_api_key,
         apis=apis,
+        schedule=schedule,
     )
     peers = await user_bots(session, payer, exclude=bot) if delegation else []
     if peers:
         services.delegate = Delegator(runtime, bot, payer)
     return Toolkit(
-        tools=build_tools(bot.tools or [], apis=bool(apis), delegation=bool(peers)),
+        tools=build_tools(
+            bot.tools or [],
+            apis=bool(apis),
+            delegation=bool(peers),
+            scheduling=schedule is not None,
+        ),
         services=services,
         note=join_notes(note, delegation_note(peers), endpoints_note(apis)),
     )

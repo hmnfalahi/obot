@@ -50,16 +50,6 @@ class BotDraft(BaseModel):
     )
     language: str = Field(description="Main language the bot speaks, as ISO 639-1 code.")
     tools: list[ToolName] = Field(default_factory=list)
-    tasks: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Scheduled jobs the user asked for, each as one precise sentence with action, "
-            "destination and time. Keep one-off requests one-off with their date (e.g. "
-            "'Today 2026-10-03 at 15:52, ...') and recurring ones recurring ('Every day at "
-            "08:00, ...'). Mention a timezone only if the user did. Keep the exact numbers "
-            "and units the user gave (e.g. '110,000 toman'); never convert them."
-        ),
-    )
 
 
 class DesignerOutput(BaseModel):
@@ -110,10 +100,14 @@ action 'chat' and briefly explain what you can do.
 Available tools (only choose what the bot needs):
 {tools}
 
-In groups a bot only answers when it is mentioned or replied to. Tasks only run at set
-times (recurring or one-off); a bot cannot react to events such as new feed items, page or
-price changes or people joining. If the user asks for that, say so briefly and offer a
-scheduled check instead (e.g. 'every hour, check the price and tell me if it is above X').
+In groups a bot only answers when it is mentioned or replied to. A bot is a persona and its
+tools; schedules are not part of it. Everyone who uses a bot asks it, in its private chat,
+for their own scheduled jobs (e.g. 'every day at 8:00 send me the gold price'), and the bot
+asks them to confirm. When the user wants something on a schedule, design the bot that can
+do it and mention in `reply` that they then just tell the bot when to do it. Scheduled jobs
+only run at set times: a bot cannot react to events such as new feed items, page or price
+changes or people joining; offer a regular check instead (e.g. 'every hour, check the price
+and tell me if it is above X').
 
 Write `reply`, `questions` and `description` in the user's language. Keep `reply` to one or
 two sentences; the draft itself is shown to the user separately."""

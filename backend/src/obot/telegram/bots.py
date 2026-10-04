@@ -26,11 +26,11 @@ from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
-from obot.tasks.service import resume_waiting
 from obot.telegram.addressing import is_addressed, strip_mention
 from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.runtime import Runtime
+from obot.telegram.scheduling import Scheduler
 from obot.telegram.toolkit import toolkit
 
 log = logging.getLogger(__name__)
@@ -53,13 +53,14 @@ async def on_start(
     if not await _allowed_in_private(message, bot_record, runtime):
         return
     await join_bot(session, bot_record, message.from_user.id, message.from_user.language_code)
-    first_time = await mark_owner_started(session, bot_record, message.from_user.id)
-    if first_time:
-        await resume_waiting(session, bot_record, datetime.now(UTC))
-    text = (
-        "All set — I can message you now." if first_time else f"Hi! I'm {bot_record.display_name}."
+    await mark_owner_started(session, bot_record, message.from_user.id)
+    text = t(
+        lang_of(message.from_user.language_code),
+        "bot.hello",
+        name=bot_record.display_name,
+        description=(bot_record.persona or {}).get("description", ""),
     )
-    await runtime.sender.send_text(message.bot, message.chat.id, text, group=False)
+    await runtime.sender.send_text(message.bot, message.chat.id, text.strip(), group=False)
 
 
 @router.message(Command("report"))
@@ -131,8 +132,7 @@ async def on_private_text(
     user, _ = await join_bot(
         session, bot_record, message.from_user.id, message.from_user.language_code
     )
-    if await mark_owner_started(session, bot_record, message.from_user.id):
-        await resume_waiting(session, bot_record, datetime.now(UTC))
+    await mark_owner_started(session, bot_record, message.from_user.id)
     scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
     incoming = await _record_incoming(session, scope, message)
     await _respond(
@@ -280,7 +280,15 @@ async def _respond(
                 session, runtime.pricing, bot_record, payer, scope, text, runtime.embedder
             )
         chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record, payer)
-        kit = await toolkit(session, runtime, bot_record, now, payer)
+        # People make their own scheduled tasks in a private chat (SPEC 8.7).
+        schedule = (
+            None
+            if group
+            else Scheduler(
+                runtime, bot_record, payer, inbound.client, lang_of(inbound.sender_language)
+            )
+        )
+        kit = await toolkit(session, runtime, bot_record, now, payer, schedule=schedule)
         reply = await generate_reply(
             chosen.model,
             profile,

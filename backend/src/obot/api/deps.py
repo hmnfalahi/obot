@@ -74,9 +74,9 @@ OwnedBot = Annotated[Bot, Depends(owned_bot)]
 
 
 async def owned_task(task_id: int, user: CurrentUser, session: Session) -> Task:
+    """One of the user's own tasks; the bot's owner has no say over them (SPEC 8.7)."""
     task = await session.get(Task, task_id)
-    bot = await session.get(Bot, task.bot_id) if task else None
-    if task is None or bot is None or bot.owner_id != user.id:
+    if task is None or task.user_id != user.id:
         raise HTTPException(404, "task not found")
     return task
 

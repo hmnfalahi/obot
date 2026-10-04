@@ -1,4 +1,4 @@
-"""Executes due scheduled tasks (SPEC 7.2)."""
+"""Executes due scheduled tasks (SPEC 7.2), each for and paid by its user (SPEC 8.7)."""
 
 import asyncio
 import logging
@@ -9,8 +9,9 @@ from aiogram import Bot
 from sqlalchemy.orm import joinedload
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
+from obot.bots.access import can_use
 from obot.bots.byok import pays_with_key, reply_model
-from obot.bots.users import user_bots
+from obot.bots.users import has_started, user_bots
 from obot.chat.history import ChatScope, record_message
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
@@ -23,6 +24,7 @@ from obot.memory.store import MEMORY_TOOL
 from obot.notices import first_today
 from obot.tasks.service import claim_due, record_run
 from obot.telegram.runtime import Runtime
+from obot.telegram.scheduling import is_chat_admin
 from obot.telegram.toolkit import toolkit
 
 log = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ CONCURRENT_RUNS = 8
 
 
 @dataclass(frozen=True)
-class OwnerContact:
+class Contact:
     """Plain values, still usable after a session rollback expired the ORM objects."""
 
     tg_user_id: int
@@ -153,11 +155,11 @@ async def _run_chain(
     runtime: Runtime,
     task: Task,
     bot_record: BotRecord,
+    payer: User,
     started: datetime,
     scope: ChatScope,
 ) -> str:
-    """Run every step in order; the last step's output. The task's owner pays."""
-    payer = bot_record.owner
+    """Run every step in order, paid by `payer`; the last step's output."""
     language = (bot_record.persona or {}).get("language")
     output: str | None = None
     for index, step in enumerate(task.steps):
@@ -207,56 +209,66 @@ async def run_due_tasks(runtime: Runtime) -> None:
     await asyncio.gather(*(run(task_id) for task_id in task_ids))
 
 
+async def _cannot_run(
+    session, client: Bot, bot_record: BotRecord, user: User, task: Task
+) -> tuple[str, bool] | None:
+    """Why the task may not run now, and whether to tell its user; None if it may."""
+    if not can_use(bot_record, user.tg_user_id):
+        # Made private: the task waits until the bot is shared again (SPEC 8.7).
+        return "the bot is private now", False
+    if not await has_started(session, bot_record, user.tg_user_id):
+        return "the user stopped using the bot", False  # blocked it: we cannot tell them
+    group = task.destination_chat_id != user.tg_user_id
+    if group and not await is_chat_admin(client, task.destination_chat_id, user.tg_user_id):
+        return "you are no longer an admin of the chat it posts to", True
+    return None
+
+
 async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> None:
     async with runtime.sessionmaker() as session:
         task = await session.get(Task, task_id)
         bot_record = await session.get(
             BotRecord, task.bot_id, options=[joinedload(BotRecord.owner)]
         )
-        owner = bot_record.owner
-        contact = OwnerContact(owner.tg_user_id, owner.timezone, owner.language)
-        username, summary = bot_record.username, task.summary
-        to_owner = task.destination_chat_id == owner.tg_user_id
-
-        if to_owner and not bot_record.owner_started:
-            await record_run(session, task, started, error="owner has not started the bot")
-            await session.commit()
-            await _notify_owner(
-                runtime,
-                contact,
-                f"task-waiting:{bot_record.id}",
-                started,
-                "owner.task_waiting",
-                username=username,
-            )
-            return
-
-        byok = pays_with_key(bot_record, owner)
-        quota = await check_llm_quota(
-            session, runtime.pricing, owner, bot_record, started, byok=byok
-        )
-        if not quota.allowed:
-            await record_run(session, task, started, error=f"quota: {quota.reason}")
-            await session.commit()
-            await _notify_owner(
-                runtime,
-                contact,
-                f"task-quota:{task_id}",
-                started,
-                "owner.task_failed",
-                username=username,
-                summary=summary,
-                error=t(lang_of(contact.language), f"quota.{quota.reason}"),
-            )
-            return
-
-        scope = ChatScope(bot_id=bot_record.id, tg_chat_id=task.destination_chat_id)
-        group = task.destination_chat_id < 0
+        user = await session.get(User, task.user_id)
+        contact = Contact(user.tg_user_id, user.timezone, user.language)
+        summary = task.summary
         token = runtime.cipher.decrypt(bot_record.token_encrypted, str(bot_record.tg_bot_id))
         bot = Bot(token)
         try:
+            if blocked := await _cannot_run(session, bot, bot_record, user, task):
+                reason, tell = blocked
+                await record_run(session, task, started, error=reason)
+                await session.commit()
+                log.info("task %s skipped: %s", task_id, reason)
+                if tell:
+                    await _notify_user(
+                        runtime, bot, contact, f"task-blocked:{task_id}", started, summary, reason
+                    )
+                return
+
+            byok = pays_with_key(bot_record, user)
+            quota = await check_llm_quota(
+                session, runtime.pricing, user, bot_record, started, byok=byok
+            )
+            if not quota.allowed:
+                await record_run(session, task, started, error=f"quota: {quota.reason}")
+                await session.commit()
+                await _notify_user(
+                    runtime,
+                    bot,
+                    contact,
+                    f"task-quota:{task_id}",
+                    started,
+                    summary,
+                    t(lang_of(contact.language), f"quota.{quota.reason}"),
+                )
+                return
+
+            scope = ChatScope(bot_id=bot_record.id, tg_chat_id=task.destination_chat_id)
+            group = task.destination_chat_id < 0
             if task.steps:
-                text = await _run_chain(session, runtime, task, bot_record, started, scope)
+                text = await _run_chain(session, runtime, task, bot_record, user, started, scope)
             else:
                 prompt = task_prompt(task, (bot_record.persona or {}).get("language"))
                 try:
@@ -264,7 +276,7 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
                         session,
                         runtime,
                         bot_record,
-                        owner,
+                        user,
                         True,
                         prompt,
                         started,
@@ -285,29 +297,28 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
             )
             await record_run(session, task, started)
             await session.commit()
-            log.info("task %s of bot %s ran (%s)", task.id, bot_record.id, task.summary)
+            log.info("task %s of bot %s ran (%s)", task_id, bot_record.id, summary)
         except Exception as e:
-            log.exception("task %s of bot @%s failed", task_id, username)
+            log.exception("task %s of bot %s failed", task_id, bot_record.id)
             await session.rollback()
             task = await session.get(Task, task_id)
             await record_run(session, task, started, error=_error_text(e, None)[:1000])
             await session.commit()
-            await _notify_owner(
+            await _notify_user(
                 runtime,
+                bot,
                 contact,
                 f"task-failed:{task_id}",
                 started,
-                "owner.task_failed",
-                username=username,
-                summary=summary,
-                error=_error_text(e, lang_of(contact.language)),
+                summary,
+                _error_text(e, lang_of(contact.language)),
             )
         finally:
             await bot.session.close()
 
 
 def _error_text(e: Exception, lang: str | None) -> str:
-    """Why a task failed: for the run log (lang None) or for the owner."""
+    """Why a task failed: for the run log (lang None) or for its user."""
     if not isinstance(e, StepFailed):
         return f"{type(e).__name__}: {e}" if lang is None else type(e).__name__
     if e.reason.startswith("byok.reason."):
@@ -315,27 +326,27 @@ def _error_text(e: Exception, lang: str | None) -> str:
     elif e.reason.startswith("quota: "):
         reason = t(lang or "en", f"quota.{e.reason.removeprefix('quota: ')}")
     elif lang is not None and e.__cause__ is not None:
-        # Exception messages may be long or technical; the owner gets the kind only.
+        # Exception messages may be long or technical; the user gets the kind only.
         reason = type(e.__cause__).__name__
     else:
         reason = e.reason
     return f"step {e.index + 1} (@{e.username}): {reason}" if e.numbered else reason
 
 
-async def _notify_owner(
+async def _notify_user(
     runtime: Runtime,
-    contact: OwnerContact,
+    client: Bot,
+    contact: Contact,
     key: str,
     now: datetime,
-    message_key: str,
-    **kwargs: object,
+    summary: str,
+    error: str,
 ) -> None:
-    """Tell the owner through the factory bot, at most once a day per key."""
+    """Tell the task's user, in their chat with the bot, at most once a day per key."""
     if not await first_today(runtime.redis, key, now, contact.timezone):
         return
+    text = t(lang_of(contact.language), "task.failed", summary=summary, error=error)
     try:
-        await runtime.factory_bot.send_message(
-            contact.tg_user_id, t(lang_of(contact.language), message_key, **kwargs)
-        )
+        await runtime.sender.send_text(client, contact.tg_user_id, text, group=False)
     except Exception:
-        log.warning("could not notify owner %s", contact.tg_user_id, exc_info=True)
+        log.warning("could not tell user %s about task %s", contact.tg_user_id, key, exc_info=True)

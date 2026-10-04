@@ -10,11 +10,9 @@ import {
   type HttpMethod,
   type Me,
   type Provider,
-  type Task,
-  type TaskAdd,
   type ToolName,
 } from '../api'
-import { formatDateTime, formatNumber, useI18n } from '../i18n'
+import { formatNumber, useI18n } from '../i18n'
 import { confirm, haptic, openTelegramLink } from '../telegram'
 import { useLoad } from '../hooks'
 import { ErrorBox, Loading } from '../ui'
@@ -46,7 +44,6 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
       <Access bot={data} me={me} onSaved={bot.set} />
       <OwnKey bot={data} onSaved={bot.set} />
       <Apis bot={data} me={me} onSaved={bot.set} />
-      <Tasks bot={data} me={me} onChange={bot.reload} />
       <Chats bot={data} />
       <Usage id={id} />
     </>
@@ -512,123 +509,6 @@ function ApiForm({
         </button>
       </div>
       {error && <p className="error">{error}</p>}
-    </div>
-  )
-}
-
-function Tasks({ bot, me, onChange }: { bot: BotDetail; me: Me; onChange: () => void }) {
-  const { t } = useI18n()
-  const [text, setText] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<TaskAdd | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const run = async (action: () => Promise<unknown>) => {
-    setBusy(true)
-    setError(null)
-    try {
-      await action()
-      onChange()
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const add = () =>
-    run(async () => {
-      const added = await api.addTask(bot.id, text)
-      setResult(added)
-      if (added.scheduled.length) setText('')
-    })
-
-  return (
-    <>
-      <h2>{t('tasks')}</h2>
-      {bot.tasks.length === 0 && <p className="hint card">{t('noTasks')}</p>}
-      {bot.tasks.map((task) => (
-        <TaskCard
-          key={task.id}
-          task={task}
-          bot={bot}
-          me={me}
-          busy={busy}
-          onPause={(paused) => run(() => api.pauseTask(task.id, paused))}
-          onDelete={() => run(() => api.deleteTask(task.id))}
-        />
-      ))}
-      <div className="card">
-        <textarea
-          style={{ minHeight: 60 }}
-          placeholder={t('addTaskPlaceholder')}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button className="btn block" disabled={busy || text.trim().length < 3} onClick={add}>
-          {t('add')}
-        </button>
-        {result?.rejected.map((r) => (
-          <p key={r.summary} className="error">
-            {t('rejected')}: {r.summary} — {r.reason}
-          </p>
-        ))}
-        {error && <p className="error">{error}</p>}
-      </div>
-    </>
-  )
-}
-
-function TaskCard(props: {
-  task: Task
-  bot: BotDetail
-  me: Me
-  busy: boolean
-  onPause: (paused: boolean) => void
-  onDelete: () => void
-}) {
-  const { task, bot, me, busy } = props
-  const { t, lang } = useI18n()
-  const chat = bot.chats.find((c) => c.id === task.destination_chat_id)
-  const destination = task.to_owner ? t('toOwner') : `${t('toChat')} ${chat?.title ?? task.destination_chat_id}`
-
-  return (
-    <div className="card">
-      <div className="row between">
-        <strong>{task.summary}</strong>
-        {task.status !== 'active' && <span className="badge">{t(`status.${task.status}`)}</span>}
-      </div>
-      <div className="hint">{destination}</div>
-      {task.steps.length > 0 && (
-        <div className="hint">
-          {t('chainSteps')}
-          <ol style={{ margin: '4px 0', paddingInlineStart: 20 }}>
-            {task.steps.map((step, i) => (
-              <li key={i}>
-                <span dir="ltr">{step.bot_username ? `@${step.bot_username}` : t('thisBot')}</span>: {step.instruction}
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-      {task.next_run_at && task.status !== 'paused' && (
-        <div className="hint">
-          {t('next')}: {formatDateTime(task.next_run_at, lang, me.timezone)}
-        </div>
-      )}
-      {task.last_error && (
-        <div className="error">
-          {t('lastError')}: {task.last_error}
-        </div>
-      )}
-      <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn secondary" disabled={busy} onClick={() => props.onPause(task.status !== 'paused')}>
-          {task.status === 'paused' ? t('resume') : t('pause')}
-        </button>
-        <button className="btn danger" disabled={busy} onClick={props.onDelete}>
-          {t('delete')}
-        </button>
-      </div>
     </div>
   )
 }

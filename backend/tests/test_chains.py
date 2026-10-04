@@ -44,7 +44,7 @@ def planned(steps: list[tuple[str, str]], **overrides) -> PlannedTask:
         "schedule": "cron",
         "cron": "0 8 * * *",
         "timezone": "Asia/Tehran",
-        "destination": "owner",
+        "destination": "me",
         "summary": "every day at 8",
         "steps": [PlannedStep(instruction=i, bot=b) for i, b in steps],
     }
@@ -60,7 +60,7 @@ async def test_steps_resolve_bots(session, cipher) -> None:
     peers = [KnownBot(77, "fr_bot", "translator")]
     item = planned([("Get the news", "self"), ("Summarize", "@news_bot"), ("Translate", "@FR_bot")])
 
-    [task], rejected = build_tasks([item], bot, [], plan, 0, NOW, peers=peers)
+    [task], rejected = build_tasks([item], bot, bot.owner, [], plan, 0, NOW, peers=peers)
 
     assert rejected == []
     assert task.steps == [
@@ -77,7 +77,7 @@ async def test_invalid_chains_are_rejected(session, cipher) -> None:
     stranger = planned([("Get", "self"), ("Translate", "@someone_else_bot")])
     single = planned([("Only one", "self")])
 
-    tasks, rejected = build_tasks([too_long, stranger, single], bot, [], plan, 0, NOW)
+    tasks, rejected = build_tasks([too_long, stranger, single], bot, bot.owner, [], plan, 0, NOW)
 
     assert [r.reason for r in rejected] == [
         "a chain can have at most 5 steps",
@@ -175,6 +175,7 @@ def runtime_for(session, cipher, model: Scripted) -> SimpleNamespace:
 async def chain_of(session, bot: Bot, peer: Bot) -> Task:
     task = Task(
         bot_id=bot.id,
+        user_id=bot.owner_id,
         summary="digest",
         instruction="digest",
         schedule_kind=ScheduleKind.CRON,
@@ -199,7 +200,7 @@ async def test_chain_feeds_each_output_to_the_next_step(session, cipher) -> None
     model = Scripted()
     runtime = runtime_for(session, cipher, model)
 
-    text = await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
+    text = await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
 
     assert text == "fr_bot did: Translate to English"
     assert [name for name, _ in model.prompts] == ["news_bot", "news_bot", "fr_bot"]
@@ -217,7 +218,7 @@ async def test_failing_step_names_the_step_and_bot(session, cipher) -> None:
     runtime = runtime_for(session, cipher, Scripted(fail_for="fr_bot"))
 
     with pytest.raises(StepFailed) as failed:
-        await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
+        await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
 
     assert (failed.value.index, failed.value.username) == (2, "fr_bot")
     assert _error_text(failed.value, "en") == (
@@ -234,12 +235,12 @@ async def test_peer_steps_check_availability_and_quota(session, cipher) -> None:
 
     peer.status = BotStatus.SUSPENDED
     with pytest.raises(StepFailed, match="not available"):
-        await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
+        await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
 
     peer.status = BotStatus.ACTIVE
     (await bot_settings(session, peer.owner, peer)).daily_credit_cap = 0
     with pytest.raises(StepFailed) as failed:
-        await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
+        await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
     assert failed.value.reason == "quota: bot_daily_cap"
     assert [name for name, _ in model.prompts].count("fr_bot") == 0
 
@@ -256,6 +257,7 @@ async def test_steps_of_another_owners_bot_never_run(session, cipher) -> None:
             runtime_for(session, cipher, model),
             task,
             bot,
+            bot.owner,
             NOW,
             ChatScope(bot.id, OWNER),
         )
@@ -276,6 +278,7 @@ async def test_a_peer_first_step_checks_its_quota(session, cipher) -> None:
             runtime_for(session, cipher, model),
             task,
             bot,
+            bot.owner,
             NOW,
             ChatScope(bot.id, OWNER),
         )
@@ -292,6 +295,6 @@ async def test_peer_steps_cannot_delegate(session, cipher) -> None:
     runtime = runtime_for(session, cipher, model)
     runtime.sessionmaker = None  # Delegator is built, never called
 
-    await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
+    await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
 
     assert dict(model.tools) == {"news_bot": ["ask_bot"], "fr_bot": []}

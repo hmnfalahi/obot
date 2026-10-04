@@ -5,6 +5,7 @@ import { BotPage } from './pages/BotPage'
 import { BotsPage } from './pages/BotsPage'
 import { NewBotPage } from './pages/NewBotPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { TasksPage } from './pages/TasksPage'
 import { startParam, webApp } from './telegram'
 import { ErrorBox, Loading } from './ui'
 
@@ -13,6 +14,7 @@ export type Route =
   | { page: 'bot'; id: number }
   | { page: 'new' }
   | { page: 'settings' }
+  | { page: 'tasks' }
 
 /** The factory opens one bot with ?bot=<id> (web_app button) or start_param "bot_<id>" (link). */
 function initialRoute(): Route {
@@ -63,6 +65,7 @@ export default function App() {
   else if (route.page === 'bot') content = <BotPage id={route.id} me={me} />
   else if (route.page === 'new') content = <NewBotPage onDone={() => setRoute({ page: 'bots' })} />
   else if (route.page === 'settings') content = <SettingsPage me={me} onChange={setMe} />
+  else if (route.page === 'tasks') content = <TasksPage me={me} />
   else content = <BotsPage me={me} navigate={setRoute} />
 
   return <I18n.Provider value={i18n}>{content}</I18n.Provider>

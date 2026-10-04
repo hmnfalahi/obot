@@ -26,11 +26,8 @@ from obot.api.schemas import (
     NewBotOut,
     PackageOut,
     Quota,
-    RejectedOut,
     StepOut,
-    TaskAddOut,
     TaskOut,
-    TaskRequest,
     TaskUpdate,
     UsageDay,
     UsedBotOut,
@@ -62,9 +59,8 @@ from obot.factory.designer import BotDraft
 from obot.factory.drafts import start_draft
 from obot.factory.links import create_link
 from obot.i18n import lang_of
-from obot.tasks.apply import PlanningFailed, add_tasks
 from obot.tasks.schedule import InvalidSchedule, zone
-from obot.tasks.service import cancel_task, live_tasks, set_paused
+from obot.tasks.service import cancel_task, set_paused, user_tasks
 from obot.telegram.payments import invoice_args
 from obot.telegram.profile import sync_profile
 
@@ -146,7 +142,7 @@ def _summary(bot: Bot) -> BotSummary:
     )
 
 
-async def _task_out(session: Session, task: Task, owner_tg_id: int) -> TaskOut:
+async def _task_out(session: Session, task: Task, user: User) -> TaskOut:
     last_error = await session.scalar(
         select(TaskRun.error).where(TaskRun.task_id == task.id).order_by(TaskRun.id.desc()).limit(1)
     )
@@ -155,15 +151,27 @@ async def _task_out(session: Session, task: Task, owner_tg_id: int) -> TaskOut:
     if peer_ids:
         rows = await session.execute(select(Bot.id, Bot.username).where(Bot.id.in_(peer_ids)))
         usernames = dict(rows.all())
+    bot = await session.get(Bot, task.bot_id)
+    to_me = task.destination_chat_id == user.tg_user_id
+    title = None
+    if not to_me:
+        title = await session.scalar(
+            select(BotChat.title).where(
+                BotChat.bot_id == task.bot_id, BotChat.tg_chat_id == task.destination_chat_id
+            )
+        )
     return TaskOut(
         id=task.id,
+        bot_id=bot.id,
+        bot_username=bot.username,
         summary=task.summary,
         instruction=task.instruction,
         schedule_kind=task.schedule_kind,
         cron=task.cron,
         timezone=task.timezone,
         destination_chat_id=task.destination_chat_id,
-        to_owner=task.destination_chat_id == owner_tg_id,
+        to_me=to_me,
+        destination_title=title,
         status=task.status,
         next_run_at=task.next_run_at,
         last_run_at=task.last_run_at,
@@ -183,7 +191,6 @@ def _byok(cipher: TokenCipher, bot: Bot) -> ByokOut | None:
 
 async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
     persona = bot.persona or {}
-    owner_tg_id = bot.owner.tg_user_id
     return BotDetail(
         **_summary(bot).model_dump(),
         system_prompt=persona.get("system_prompt", ""),
@@ -218,7 +225,6 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
             for m in await list_memberships(session, bot.id)
         ],
-        tasks=[await _task_out(session, t, owner_tg_id) for t in await live_tasks(session, bot)],
     )
 
 
@@ -474,31 +480,18 @@ async def create_invoice(body: InvoiceIn, user: CurrentUser, state: State) -> In
 # --- tasks ------------------------------------------------------------------------------------
 
 
-@router.post("/bots/{bot_id}/tasks")
-async def add_task(body: TaskRequest, bot: OwnedBot, session: Session, state: State) -> TaskAddOut:
-    try:
-        sync = await add_tasks(
-            session,
-            state.pricing,
-            state.models.for_tier("cheap"),
-            bot,
-            [body.request],
-        )
-    except PlanningFailed as e:
-        raise HTTPException(502, "could not understand the task; please rephrase") from e
-    owner_tg_id = bot.owner.tg_user_id
-    return TaskAddOut(
-        scheduled=[await _task_out(session, t, owner_tg_id) for t in sync.scheduled],
-        rejected=[RejectedOut(summary=r.summary, reason=r.reason) for r in sync.rejected],
-    )
+@router.get("/tasks")
+async def list_tasks(user: CurrentUser, session: Session) -> list[TaskOut]:
+    """The user's own tasks on all bots; they make them by asking a bot in private."""
+    return [await _task_out(session, t, user) for t in await user_tasks(session, user)]
 
 
 @router.patch("/tasks/{task_id}")
-async def update_task(body: TaskUpdate, task: OwnedTask, session: Session) -> TaskOut:
+async def update_task(
+    body: TaskUpdate, task: OwnedTask, user: CurrentUser, session: Session
+) -> TaskOut:
     await set_paused(session, task, body.paused, datetime.now(UTC))
-    bot = await session.get(Bot, task.bot_id)
-    owner = await session.get(User, bot.owner_id)
-    return await _task_out(session, task, owner.tg_user_id)
+    return await _task_out(session, task, user)
 
 
 @router.delete("/tasks/{task_id}", status_code=204)

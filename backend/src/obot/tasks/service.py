@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from obot.billing.plans import Plan
 from obot.db.models import (
@@ -18,8 +19,8 @@ from obot.db.models import (
 from obot.tasks.planner import KnownBot, KnownChat, PlannedStep, PlannedTask
 from obot.tasks.schedule import InvalidSchedule, Schedule, next_run, validate, zone
 
-LIVE_STATUSES = (TaskStatus.ACTIVE, TaskStatus.WAITING_START, TaskStatus.PAUSED)
-RUNNABLE_STATUSES = (TaskStatus.ACTIVE, TaskStatus.WAITING_START)
+# Tasks that count against the plan and show in lists; drafts await confirmation.
+LIVE_STATUSES = (TaskStatus.ACTIVE, TaskStatus.PAUSED)
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ def _parse_run_at(value: str | None, timezone: str) -> datetime | None:
 def build_tasks(
     planned: list[PlannedTask],
     bot: Bot,
+    user: User,
     chats: list[KnownChat],
     plan: Plan,
     already_live: int,
@@ -59,7 +61,8 @@ def build_tasks(
     *,
     peers: Sequence[KnownBot] = (),
 ) -> tuple[list[Task], list[Rejected]]:
-    """Validate planned tasks against the plan, the bot's chats and the owner's bots (no I/O)."""
+    """Draft `user`'s planned tasks on `bot`, validated against their plan, the chats
+    they may post to and their bots (no I/O). Drafts run once the user confirms them."""
     accepted: list[Task] = []
     rejected: list[Rejected] = []
     chat_ids = {c.id for c in chats}
@@ -69,23 +72,20 @@ def build_tasks(
                 raise InvalidSchedule(
                     f"your plan allows {plan.max_scheduled_tasks} scheduled tasks"
                 )
-            destination = _chat_or_owner(item.destination, bot, chat_ids)
             task = Task(
                 bot_id=bot.id,
+                user_id=user.id,
                 instruction=item.instruction,
                 summary=item.summary,
                 timezone=item.timezone,
-                destination_chat_id=destination,
+                destination_chat_id=_destination(item.destination, user, chat_ids),
+                status=TaskStatus.DRAFT,
             )
             _schedule(task, item, plan, now)
             task.steps = _chain(item.steps, bot, peers, plan)
         except InvalidSchedule as e:
             rejected.append(Rejected(item.summary, str(e)))
             continue
-        to_owner = destination == bot.owner.tg_user_id
-        task.status = (
-            TaskStatus.WAITING_START if to_owner and not bot.owner_started else TaskStatus.ACTIVE
-        )
         accepted.append(task)
     return accepted, rejected
 
@@ -110,15 +110,16 @@ def _chain(steps: list[PlannedStep], bot: Bot, peers: Sequence[KnownBot], plan: 
     return chain
 
 
-def _chat_or_owner(value: str | None, bot: Bot, chat_ids: set[int]) -> int:
-    if value in (None, "owner"):
-        return bot.owner.tg_user_id
+def _destination(value: str | None, user: User, chat_ids: set[int]) -> int:
+    """The user's private chat with the bot, or a chat of the bot where they are admin."""
+    if value in (None, "me"):
+        return user.tg_user_id
     try:
         chat_id = int(value)
     except ValueError as e:
         raise InvalidSchedule("unknown chat") from e
     if chat_id not in chat_ids:
-        raise InvalidSchedule("the bot is not a member of that chat")
+        raise InvalidSchedule("you can only post to groups and channels where you are an admin")
     return chat_id
 
 
@@ -135,51 +136,43 @@ def _schedule(task: Task, item: PlannedTask, plan: Plan, now: datetime) -> None:
     task.cron, task.run_at = schedule.cron, schedule.run_at
 
 
-async def count_live_tasks(
-    session: AsyncSession, owner: User, exclude_bot: Bot | None = None
-) -> int:
-    """Live tasks of the owner, optionally without one bot whose tasks are being replaced."""
-    query = (
-        select(func.count())
-        .select_from(Task)
-        .join(Bot, Bot.id == Task.bot_id)
-        .where(Bot.owner_id == owner.id, Task.status.in_(LIVE_STATUSES))
+async def count_live_tasks(session: AsyncSession, user: User) -> int:
+    """The user's tasks on all bots, as limited by their plan."""
+    return await session.scalar(
+        select(func.count()).where(Task.user_id == user.id, Task.status.in_(LIVE_STATUSES))
     )
-    if exclude_bot is not None:
-        query = query.where(Task.bot_id != exclude_bot.id)
-    return await session.scalar(query)
 
 
-async def replace_bot_tasks(session: AsyncSession, bot: Bot, tasks: list[Task]) -> None:
+async def user_tasks(session: AsyncSession, user: User, bot: Bot | None = None) -> list[Task]:
+    """The user's live tasks, on one bot or on all of them."""
+    query = select(Task).where(Task.user_id == user.id, Task.status.in_(LIVE_STATUSES))
+    if bot is not None:
+        query = query.where(Task.bot_id == bot.id)
+    return list(await session.scalars(query.order_by(Task.id)))
+
+
+async def cancel_drafts(session: AsyncSession, user: User, bot: Bot) -> None:
+    """Drop unconfirmed drafts: a new request replaces them."""
     await session.execute(
         update(Task)
-        .where(Task.bot_id == bot.id, Task.status.in_(LIVE_STATUSES))
+        .where(Task.user_id == user.id, Task.bot_id == bot.id, Task.status == TaskStatus.DRAFT)
         .values(status=TaskStatus.CANCELLED, next_run_at=None)
     )
-    session.add_all(tasks)
+
+
+async def confirm_draft(
+    session: AsyncSession, task: Task, user: User, plan: Plan, now: datetime
+) -> str | None:
+    """Start a confirmed draft; the reason when it can no longer start."""
+    if task.status != TaskStatus.DRAFT:
+        return "this task is no longer a draft"
+    if await count_live_tasks(session, user) >= plan.max_scheduled_tasks:
+        return f"your plan allows {plan.max_scheduled_tasks} scheduled tasks"
+    task.status = TaskStatus.ACTIVE
+    if task.next_run_at is None or task.next_run_at <= now:
+        advance(task, now)
     await session.flush()
-
-
-async def live_tasks(session: AsyncSession, bot: Bot) -> list[Task]:
-    rows = await session.scalars(
-        select(Task).where(Task.bot_id == bot.id, Task.status.in_(LIVE_STATUSES)).order_by(Task.id)
-    )
-    return list(rows)
-
-
-async def resume_waiting(session: AsyncSession, bot: Bot, now: datetime) -> int:
-    """The owner pressed Start: tasks waiting for it become active again."""
-    tasks = list(
-        await session.scalars(
-            select(Task).where(Task.bot_id == bot.id, Task.status == TaskStatus.WAITING_START)
-        )
-    )
-    for task in tasks:
-        task.status = TaskStatus.ACTIVE
-        if task.next_run_at is None or task.next_run_at <= now:
-            advance(task, now)
-    await session.flush()
-    return len(tasks)
+    return None
 
 
 async def claim_due(session: AsyncSession, now: datetime, limit: int) -> list[Task]:
@@ -188,16 +181,19 @@ async def claim_due(session: AsyncSession, now: datetime, limit: int) -> list[Ta
     Advancing first means a crash during execution skips a run instead of
     retrying it every minute; SKIP LOCKED lets several workers share the load.
     """
+    owner, user = aliased(User), aliased(User)
     tasks = list(
         await session.scalars(
             select(Task)
             .join(Bot, Bot.id == Task.bot_id)
-            .join(User, User.id == Bot.owner_id)
+            .join(owner, owner.id == Bot.owner_id)
+            .join(user, user.id == Task.user_id)
             .where(
-                Task.status.in_(RUNNABLE_STATUSES),
+                Task.status == TaskStatus.ACTIVE,
                 Task.next_run_at <= now,
                 Bot.status == BotStatus.ACTIVE,
-                User.is_disabled.is_(False),
+                owner.is_disabled.is_(False),
+                user.is_disabled.is_(False),
             )
             .order_by(Task.next_run_at)
             .limit(limit)

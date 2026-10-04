@@ -16,9 +16,9 @@ For each request return exactly one task:
   English (include URLs, topics and format the user asked for).
 - schedule: 'cron' with a standard 5-field cron expression for recurring tasks, or 'once'
   with run_at as a local ISO datetime (YYYY-MM-DDTHH:MM).
-- timezone: an IANA name. Use the one the user mentioned, otherwise the owner's timezone.
-- destination: 'owner' for the owner's private chat (the default), or the id of one of the
-  bot's chats when the user asked to post there.
+- timezone: an IANA name. Use the one the user mentioned, otherwise the user's timezone.
+- destination: 'me' for the user's private chat with the bot (the default), or the id of one
+  of the listed chats when the user asked to post there.
 - summary: a short human description of the schedule in the user's language,
   e.g. 'every day at 8:00' / 'هر روز ساعت ۸ صبح'.
 - steps: only for a chain, i.e. a request made of several different jobs done one after
@@ -41,7 +41,7 @@ class PlannedTask(BaseModel):
     cron: str | None = None
     run_at: str | None = None
     timezone: str
-    destination: str = Field(description="'owner' or a chat id from the list")
+    destination: str = Field(description="'me' or a chat id from the list")
     summary: str = Field(max_length=200)
     steps: list[PlannedStep] = Field(default_factory=list)
 
@@ -85,8 +85,8 @@ def build_prompt(
     peer_lines = "\n".join(f"- @{b.username}: {b.description}" for b in peers) or "(none)"
     request_lines = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(requests))
     return (
-        f"Now: {now:%Y-%m-%d %H:%M} UTC\nOwner's timezone: {timezone}\n"
-        f"Bot's chats:\n{chat_lines}\nUser's other bots:\n{peer_lines}\n\n"
+        f"Now: {now:%Y-%m-%d %H:%M} UTC\nUser's timezone: {timezone}\n"
+        f"Chats the user may post to:\n{chat_lines}\nUser's other bots:\n{peer_lines}\n\n"
         f"Requests:\n{request_lines}"
     )
 
