@@ -1,5 +1,7 @@
 """Mini app API. Every route acts as the Telegram user from the request's initData."""
 
+import base64
+import binascii
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot as TelegramBot
@@ -14,6 +16,7 @@ from obot.api.schemas import (
     ApiKeyIn,
     ApiKeyStatus,
     ApiOut,
+    AvatarIn,
     BotDetail,
     BotSummary,
     BotUpdate,
@@ -47,6 +50,7 @@ from obot.bots.apis import (
     set_key_value,
     write_endpoint,
 )
+from obot.bots.avatar import InvalidImage, square_jpeg
 from obot.bots.byok import delete_key, key_hint, read_key, save_key, wallet, wallet_key
 from obot.bots.users import bot_settings, leave_bot, user_bots
 from obot.chat.membership import list_memberships
@@ -74,7 +78,7 @@ from obot.i18n import lang_of
 from obot.tasks.schedule import InvalidSchedule, zone
 from obot.tasks.service import cancel_task, set_paused, user_tasks
 from obot.telegram.payments import invoice_args
-from obot.telegram.profile import sync_profile
+from obot.telegram.profile import set_avatar, sync_profile
 
 router = APIRouter(prefix="/api")
 
@@ -430,6 +434,18 @@ async def delete_api_key(
     bot = await _usable_bot(session, user, bot_id)
     await delete_key_value(session, user, bot, name)
     return await _my_settings(session, user, bot)
+
+
+@router.post("/bots/{bot_id}/avatar", status_code=204)
+async def upload_avatar(body: AvatarIn, bot: OwnedBot, state: State) -> None:
+    """Set the bot's profile photo from an uploaded image (cropped to a square JPEG)."""
+    try:
+        jpeg = square_jpeg(base64.b64decode(body.image, validate=True))
+    except (InvalidImage, binascii.Error) as e:
+        raise HTTPException(422, str(e) or "invalid image") from e
+    token = state.cipher.decrypt(bot.token_encrypted, str(bot.tg_bot_id))
+    if not await set_avatar(token, jpeg):
+        raise HTTPException(502, "Telegram did not accept the photo")
 
 
 @router.get("/bots/{bot_id}/usage")

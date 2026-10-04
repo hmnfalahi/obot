@@ -231,6 +231,8 @@ export const api = {
   removeUsedBot: (id: number) => request<void>('DELETE', `/used-bots/${id}`),
   bot: (id: number) => request<BotDetail>('GET', `/bots/${id}`),
   updateBot: (id: number, body: BotUpdate) => request<BotDetail>('PATCH', `/bots/${id}`, body),
+  setAvatar: (botId: number, imageBase64: string) =>
+    request<void>('POST', `/bots/${botId}/avatar`, { image: imageBase64 }),
   keys: () => request<WalletKey[]>('GET', '/keys'),
   putKey: (provider: Provider, apiKey: string) =>
     request<WalletKey[]>('PUT', `/keys/${provider}`, { api_key: apiKey }),
