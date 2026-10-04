@@ -267,3 +267,16 @@ def test_task_prompt_asks_for_bot_language() -> None:
 
     assert "'fa'" in task_prompt(task, "fa")
     assert "language" not in task_prompt(task, None)
+
+
+async def test_planner_losing_requests_keeps_existing_tasks(session, cipher, pricing) -> None:
+    from obot.tasks.apply import PlanningFailed
+
+    bot = await make_bot(session, cipher)
+    existing = await add_task(session, bot)
+    empty_plan = TestModel(custom_output_args={"tasks": []})
+
+    with pytest.raises(PlanningFailed):
+        await sync_tasks(session, pricing, empty_plan, bot, ["dollar at 8", "oil at 9"])
+
+    assert [t.id for t in await live_tasks(session, bot)] == [existing.id]

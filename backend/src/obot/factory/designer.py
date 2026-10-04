@@ -128,6 +128,10 @@ Group reply rules (in groups the bot otherwise only answers when mentioned or re
 - topic: answer messages about `topic`, described in one sentence;
 - new_member: welcome people who join.
 Give each rule a short `instruction` on how to answer. Prefer topic over long keyword lists.
+A rule only makes the bot answer inside that group. If the user wants to be told somewhere
+else (e.g. privately) or wants something done when an event happens (a keyword in a group,
+someone joining, a new RSS item, a page or price change, a webhook call), that is a task:
+describe it in `tasks` with its trigger, not as a rule.
 
 Write `reply`, `questions` and `description` in the user's language. Keep `reply` to one or
 two sentences; the draft itself is shown to the user separately."""
