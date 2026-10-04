@@ -174,13 +174,13 @@ async def get_bot(bot: OwnedBot, session: Session, state: State) -> BotDetail:
 @router.patch("/bots/{bot_id}")
 async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: State) -> BotDetail:
     persona = dict(bot.persona or {})
-    profile_changed = False
+    name_changed = description_changed = False
     if body.display_name is not None and body.display_name != bot.display_name:
         bot.display_name = body.display_name
-        profile_changed = True
+        name_changed = True
     if body.description is not None and body.description != persona.get("description"):
         persona["description"] = body.description
-        profile_changed = True
+        description_changed = True
     if body.system_prompt is not None:
         persona["system_prompt"] = body.system_prompt
     if body.language is not None:
@@ -203,7 +203,7 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
     elif body.daily_credit_cap is not None:
         bot.daily_credit_cap = body.daily_credit_cap
     await session.flush()
-    if profile_changed:
+    if name_changed or description_changed:
         token = state.cipher.decrypt(bot.token_encrypted, str(bot.tg_bot_id))
         draft = BotDraft(
             name=bot.display_name,
@@ -212,7 +212,7 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
             system_prompt=persona.get("system_prompt", ""),
             language=persona.get("language", "fa"),
         )
-        await sync_profile(token, draft, set_name=True)
+        await sync_profile(token, draft, set_name=name_changed, set_description=description_changed)
     return await _detail(session, bot, state.public_url)
 
 
