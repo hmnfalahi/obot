@@ -17,6 +17,7 @@ interface WebApp {
   openTelegramLink(url: string): void
   openInvoice(url: string, callback?: (status: 'paid' | 'cancelled' | 'failed' | 'pending') => void): void
   showAlert(message: string): void
+  showConfirm(message: string, callback: (ok: boolean) => void): void
   BackButton: BackButton
   HapticFeedback?: { notificationOccurred(type: 'success' | 'error' | 'warning'): void }
 }
@@ -42,6 +43,12 @@ export function startParam(): string | undefined {
 export function openTelegramLink(url: string): void {
   if (webApp?.initData) webApp.openTelegramLink(url)
   else window.open(url, '_blank')
+}
+
+/** Telegram's own yes/no dialog; the browser's outside Telegram. */
+export function confirm(message: string): Promise<boolean> {
+  if (webApp?.initData) return new Promise((resolve) => webApp!.showConfirm(message, resolve))
+  return Promise.resolve(window.confirm(message))
 }
 
 export function haptic(type: 'success' | 'error'): void {

@@ -53,6 +53,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.ask_bots": "ask my other bots",
         "forget.done": "Done — I forgot everything about this chat.",
         "group.start_first": "To use me, start me in private first.",
+        "bot.private": "This bot is private; only its owner and people they chose can use it.",
+        "access.pick": (
+            "Choose up to {limit} people who may use @{username}. "
+            "Your choice replaces the current list."
+        ),
+        "btn.pick_people": "Choose people",
+        "access.saved": "Done — @{username} can now be used by: {names}.",
+        "access.not_synced": (
+            "Saved, but Telegram did not accept the change yet. Try again from the panel later."
+        ),
+        "access.unknown_bot": "That bot is not yours.",
         "btn.start_bot": "Start",
         "report.usage": "Usage: /report <what is wrong>",
         "report.factory_usage": "Usage: /report @bot_username <what is wrong>",
@@ -150,6 +161,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.ask_bots": "کمک گرفتن از ربات‌های دیگرم",
         "forget.done": "انجام شد — هر چی درباره‌ی این چت می‌دونستم پاک شد.",
         "group.start_first": "برای استفاده از من، اول توی پیوی استارتم کن.",
+        "bot.private": "این ربات شخصیه؛ فقط صاحبش و کسایی که انتخاب کرده می‌تونن ازش استفاده کنن.",
+        "access.pick": (
+            "حداکثر {limit} نفر رو انتخاب کن که بتونن از @{username} استفاده کنن. "
+            "انتخابت جای فهرست فعلی رو می‌گیره."
+        ),
+        "btn.pick_people": "انتخاب افراد",
+        "access.saved": "انجام شد — این افراد می‌تونن از @{username} استفاده کنن: {names}.",
+        "access.not_synced": (
+            "ذخیره شد ولی تلگرام هنوز تغییر رو قبول نکرد. بعداً از پنل دوباره امتحان کن."
+        ),
+        "access.unknown_bot": "این ربات مال تو نیست.",
         "btn.start_bot": "استارت",
         "report.usage": "استفاده: /report <مشکل چیه>",
         "report.factory_usage": "استفاده: /report @bot_username <مشکل چیه>",

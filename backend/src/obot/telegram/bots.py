@@ -11,6 +11,7 @@ from aiogram.types import ChatMemberUpdated, InlineKeyboardButton, InlineKeyboar
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import QuotaReason, check_llm_quota, record_llm_usage
+from obot.bots.access import can_use
 from obot.bots.byok import pays_with_key, reply_model
 from obot.bots.service import mark_owner_started
 from obot.bots.users import join_bot, leave_bot, started_user
@@ -49,6 +50,8 @@ MEMBER_STATUSES = {
 async def on_start(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
+    if not await _allowed_in_private(message, bot_record, runtime):
+        return
     await join_bot(session, bot_record, message.from_user.id, message.from_user.language_code)
     first_time = await mark_owner_started(session, bot_record, message.from_user.id)
     if first_time:
@@ -122,6 +125,8 @@ async def on_membership(
 async def on_private_text(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
+    if not await _allowed_in_private(message, bot_record, runtime):
+        return
     # Any private message starts using the bot, not only /start.
     user, _ = await join_bot(
         session, bot_record, message.from_user.id, message.from_user.language_code
@@ -146,12 +151,27 @@ async def on_group_text(
     incoming = await _record_incoming(session, scope, message)
     if not is_addressed(message, message.bot.id, bot_record.username):
         return
+    if not can_use(bot_record, message.from_user.id):  # private bot: stay quiet in groups
+        return
     user = await started_user(session, bot_record, message.from_user.id)
     if user is None:
         await ask_to_start(message, bot_record, runtime)
         return
     text = strip_mention(message.text, bot_record.username) or message.text
     await _respond(Inbound.of(message), text, incoming, scope, session, bot_record, user, runtime)
+
+
+async def _allowed_in_private(message: Message, bot_record: BotRecord, runtime: Runtime) -> bool:
+    """A private bot tells strangers it is private, without a model call."""
+    if can_use(bot_record, message.from_user.id):
+        return True
+    await runtime.sender.send_text(
+        message.bot,
+        message.chat.id,
+        t(lang_of(message.from_user.language_code), "bot.private"),
+        group=False,
+    )
+    return False
 
 
 async def ask_to_start(message: Message, bot_record: BotRecord, runtime: Runtime) -> None:

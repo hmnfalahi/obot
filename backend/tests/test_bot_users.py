@@ -10,6 +10,7 @@ from sqlalchemy import select
 from obot.bots.users import has_started, join_bot, leave_bot
 from obot.config import get_settings
 from obot.db.models import Bot as BotRecord
+from obot.db.models import BotVisibility
 from obot.db.models import User as UserRecord
 from obot.telegram import bots as bots_module
 from tests.test_history import make_bot
@@ -33,6 +34,7 @@ async def redis():
 async def bot_record(session, cipher) -> BotRecord:
     record = await session.get(BotRecord, await make_bot(session, cipher, 1))
     record.username = USERNAME
+    record.visibility = BotVisibility.PUBLIC  # Ali is not the owner
     return record
 
 
