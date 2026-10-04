@@ -35,7 +35,7 @@ from obot.factory.designer import BotDraft
 from obot.factory.drafts import start_draft
 from obot.factory.links import create_link
 from obot.i18n import lang_of
-from obot.tasks.apply import add_tasks
+from obot.tasks.apply import PlanningFailed, add_tasks
 from obot.tasks.events import HookRejected, accept_webhook
 from obot.tasks.schedule import InvalidSchedule, zone
 from obot.tasks.service import cancel_task, hook_url, live_tasks, set_paused
@@ -304,14 +304,17 @@ async def incoming_hook(task_id: int, secret: str, request: Request, session: Se
 
 @router.post("/bots/{bot_id}/tasks")
 async def add_task(body: TaskRequest, bot: OwnedBot, session: Session, state: State) -> TaskAddOut:
-    sync = await add_tasks(
-        session,
-        state.pricing,
-        state.models.for_tier("cheap"),
-        bot,
-        [body.request],
-        public_url=state.public_url,
-    )
+    try:
+        sync = await add_tasks(
+            session,
+            state.pricing,
+            state.models.for_tier("cheap"),
+            bot,
+            [body.request],
+            public_url=state.public_url,
+        )
+    except PlanningFailed as e:
+        raise HTTPException(502, "could not understand the task; please rephrase") from e
     owner_tg_id = bot.owner.tg_user_id
     return TaskAddOut(
         scheduled=[

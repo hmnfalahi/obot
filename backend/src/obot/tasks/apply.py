@@ -1,5 +1,6 @@
 """Turning a draft's task sentences into scheduled tasks of a bot."""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -12,6 +13,12 @@ from obot.chat.membership import list_memberships
 from obot.db.models import Bot, Task, UsageKind
 from obot.tasks.planner import KnownChat, plan_tasks
 from obot.tasks.service import Rejected, build_tasks, count_live_tasks, replace_bot_tasks
+
+log = logging.getLogger(__name__)
+
+
+class PlanningFailed(Exception):
+    """The planner did not account for every request; existing tasks are kept."""
 
 
 @dataclass
@@ -35,6 +42,12 @@ async def sync_tasks(
     already_live = await count_live_tasks(session, bot.owner, exclude_bot=bot)
     sync = await _plan(session, pricing, model, bot, requests, already_live, public_url)
     await replace_bot_tasks(session, bot, sync.scheduled)
+    log.info(
+        "tasks of bot %s replaced: %d scheduled, %d rejected",
+        bot.id,
+        len(sync.scheduled),
+        len(sync.rejected),
+    )
     return sync
 
 
@@ -81,6 +94,16 @@ async def _plan(
         result.output_tokens,
         kind=UsageKind.MEMORY,
     )
+    # One task per request: anything else means the model lost or invented some, and
+    # replacing the bot's tasks with that would silently drop the owner's tasks.
+    if len(result.plan.tasks) != len(requests):
+        log.warning(
+            "planner returned %d tasks for %d requests of bot %s",
+            len(result.plan.tasks),
+            len(requests),
+            bot.id,
+        )
+        raise PlanningFailed()
     tasks, rejected = build_tasks(
         result.plan.tasks,
         bot,
