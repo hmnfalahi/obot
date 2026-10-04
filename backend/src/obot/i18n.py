@@ -2,14 +2,13 @@
 
 MESSAGES: dict[str, dict[str, str]] = {
     "en": {
-        "quota.daily_messages": "I've reached today's message limit. I'll be back tomorrow!",
-        "quota.bot_daily_cap": "I've reached today's usage limit. I'll be back tomorrow!",
-        "quota.no_credits": "I'm out of credits right now. Please try again later.",
-        "owner.quota.daily_messages": (
-            "Your bots used all {limit} free messages for today. They will answer again tomorrow."
+        "quota.daily_messages": (
+            "You've used today's free messages. Top up credits to keep going, or come back "
+            "tomorrow."
         ),
-        "owner.quota.bot_daily_cap": "@{username} reached its daily usage cap.",
-        "owner.quota.no_credits": "Your credit balance is empty, so your bots stopped replying.",
+        "quota.bot_daily_cap": "You've reached the daily limit you set for this bot.",
+        "quota.no_credits": "You're out of credits. Top up to keep going.",
+        "btn.top_up": "Top up",
         "factory.bot_limit": (
             "You already have {limit} active bots, the limit of your plan. "
             "This bot was created but is suspended."
@@ -102,14 +101,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "byok.reason.provider": "the provider returned an error or did not respond",
     },
     "fa": {
-        "quota.daily_messages": "سهمیه‌ی پیام امروزم تموم شده. فردا برمی‌گردم!",
-        "quota.bot_daily_cap": "سقف مصرف امروزم پر شده. فردا برمی‌گردم!",
-        "quota.no_credits": "الان اعتبارم تموم شده. لطفاً بعداً دوباره امتحان کن.",
-        "owner.quota.daily_messages": (
-            "ربات‌هات همه‌ی {limit} پیام رایگان امروز رو مصرف کردن. از فردا دوباره جواب می‌دن."
+        "quota.daily_messages": (
+            "پیام‌های رایگان امروزت تموم شده. برای ادامه اعتبار بخر یا فردا برگرد."
         ),
-        "owner.quota.bot_daily_cap": "@{username} به سقف مصرف روزانه‌اش رسید.",
-        "owner.quota.no_credits": "اعتبارت تموم شده و ربات‌هات دیگه جواب نمی‌دن.",
+        "quota.bot_daily_cap": "به سقف مصرف روزانه‌ای که برای این ربات گذاشتی رسیدی.",
+        "quota.no_credits": "اعتبارت تموم شده. برای ادامه شارژ کن.",
+        "btn.top_up": "شارژ",
         "factory.bot_limit": (
             "الان {limit} ربات فعال داری که سقف پلنته. این ربات ساخته شد ولی غیرفعاله."
         ),

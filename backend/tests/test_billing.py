@@ -14,7 +14,8 @@ from obot.billing.usage import (
     record_tool_usage,
     start_of_day,
 )
-from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
+from obot.bots.users import bot_settings
 from obot.db.models import UsageKind
 
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
@@ -88,14 +89,38 @@ async def test_daily_limit_is_shared_by_all_owner_bots(session, cipher, pricing)
     assert decision.reason == QuotaReason.DAILY_MESSAGES
 
 
-async def test_bot_daily_credit_cap(session, cipher, pricing) -> None:
+async def test_daily_cap_is_each_persons_own(session, cipher, pricing) -> None:
     bot = await make_bot(session, cipher)
-    bot.daily_credit_cap = 30
-    await record_llm_usage(session, pricing, bot.owner, bot, MODEL, 3000, 300)  # 30 credits
+    ali = await get_or_create_user(session, 5005)
+    (await bot_settings(session, ali, bot)).daily_credit_cap = 30
+    await record_llm_usage(session, pricing, ali, bot, MODEL, 3000, 300)  # 30 credits
 
-    decision = await check_llm_quota(session, pricing, bot.owner, bot, datetime.now(UTC))
-
+    decision = await check_llm_quota(session, pricing, ali, bot, datetime.now(UTC))
     assert decision.reason == QuotaReason.BOT_DAILY_CAP
+    # The owner set no cap of their own, and Ali's spending is not theirs.
+    assert (await check_llm_quota(session, pricing, bot.owner, bot, datetime.now(UTC))).allowed
+
+
+async def test_calls_are_paid_by_whoever_asked(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    ali = await get_or_create_user(session, 5005)
+    ali.plan, ali.credit_balance = "paid", 100
+    bot.owner.plan, bot.owner.credit_balance = "paid", 100
+
+    event = await record_llm_usage(session, pricing, ali, bot, MODEL, 3000, 300)
+
+    assert event.payer_id == ali.id and ali.credit_balance == 100 - event.credits
+    assert bot.owner.credit_balance == 100
+
+
+async def test_obot_pays_when_there_is_no_payer(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+
+    event = await record_llm_usage(
+        session, pricing, None, bot, MODEL, 3000, 300, kind=UsageKind.MEMORY
+    )
+
+    assert event.payer_id is None and event.credits > 0
 
 
 async def test_paid_plan_deducts_credits(session, cipher, pricing) -> None:

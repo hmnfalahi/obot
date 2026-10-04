@@ -36,6 +36,7 @@ from obot.api.schemas import (
 from obot.billing.usage import count_messages, start_of_day
 from obot.bots.apis import ensure_room, list_endpoints, read_headers, write_endpoint
 from obot.bots.byok import clear_key, key_hint, read_key, set_key, uses_byok
+from obot.bots.users import bot_settings
 from obot.chat.membership import list_memberships
 from obot.core.byok import KeyCheckFailed
 from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
@@ -66,7 +67,7 @@ async def _count_today(session: Session, user: User, kind: UsageKind) -> int:
         return await count_messages(session, user, since)
     return await session.scalar(
         select(func.count()).where(
-            UsageEvent.owner_id == user.id, UsageEvent.kind == kind, UsageEvent.created_at >= since
+            UsageEvent.payer_id == user.id, UsageEvent.kind == kind, UsageEvent.created_at >= since
         )
     )
 
@@ -183,7 +184,8 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
             )
             for row in await list_endpoints(session, bot)
         ],
-        daily_credit_cap=bot.daily_credit_cap,
+        # The owner's own cap: everyone else sets theirs (SPEC 8.7).
+        daily_credit_cap=(await bot_settings(session, bot.owner, bot)).daily_credit_cap,
         chats=[
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
             for m in await list_memberships(session, bot.id)
@@ -225,9 +227,9 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
             raise HTTPException(403, "this model needs the paid plan")
         bot.model_tier = body.model_tier
     if body.clear_daily_credit_cap:
-        bot.daily_credit_cap = None
+        (await bot_settings(session, bot.owner, bot)).daily_credit_cap = None
     elif body.daily_credit_cap is not None:
-        bot.daily_credit_cap = body.daily_credit_cap
+        (await bot_settings(session, bot.owner, bot)).daily_credit_cap = body.daily_credit_cap
     await session.flush()
     if name_changed or description_changed:
         token = state.cipher.decrypt(bot.token_encrypted, str(bot.tg_bot_id))

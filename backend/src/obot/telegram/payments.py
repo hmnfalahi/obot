@@ -5,7 +5,7 @@ import uuid
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -55,6 +55,10 @@ def invoice_args(lang: str, package: StarPackage) -> dict:
     }
 
 
+# Bots send people who ran out of messages here: t.me/<factory>?start=buy
+@router.message(
+    CommandStart(deep_link=True, magic=F.args == "buy"), F.chat.type == ChatType.PRIVATE
+)
 @router.message(Command("buy"), F.chat.type == ChatType.PRIVATE)
 async def on_buy(message: Message, session: AsyncSession, runtime: Runtime) -> None:
     user = await get_or_create_user(session, message.from_user.id, message.from_user.language_code)

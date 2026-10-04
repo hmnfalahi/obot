@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.bots.service import get_or_create_user
-from obot.db.models import Bot, BotUser, User
+from obot.db.models import Bot, BotUser, User, UserBotSettings
 
 
 async def join_bot(
@@ -44,10 +44,28 @@ async def leave_bot(session: AsyncSession, bot: Bot, tg_user_id: int) -> None:
         await session.flush()
 
 
-async def has_started(session: AsyncSession, bot: Bot, tg_user_id: int) -> bool:
-    row = await session.scalar(
-        select(BotUser.id)
-        .join(User, User.id == BotUser.user_id)
+async def started_user(session: AsyncSession, bot: Bot, tg_user_id: int) -> User | None:
+    """The person's account if they use the bot (started it and did not leave)."""
+    return await session.scalar(
+        select(User)
+        .join(BotUser, BotUser.user_id == User.id)
         .where(BotUser.bot_id == bot.id, User.tg_user_id == tg_user_id, BotUser.left_at.is_(None))
     )
-    return row is not None
+
+
+async def has_started(session: AsyncSession, bot: Bot, tg_user_id: int) -> bool:
+    return await started_user(session, bot, tg_user_id) is not None
+
+
+async def bot_settings(session: AsyncSession, user: User, bot: Bot) -> UserBotSettings:
+    """The person's own settings for the bot, created on first use."""
+    row = await session.scalar(
+        select(UserBotSettings).where(
+            UserBotSettings.user_id == user.id, UserBotSettings.bot_id == bot.id
+        )
+    )
+    if row is None:
+        row = UserBotSettings(user_id=user.id, bot_id=bot.id)
+        session.add(row)
+        await session.flush()
+    return row

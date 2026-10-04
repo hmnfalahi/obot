@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from obot.billing.plans import ModelPrice, Pricing
 from obot.bots.byok import set_key
-from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
 from obot.config import get_settings
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import Provider
@@ -68,22 +68,38 @@ async def test_delegate_answers_with_callee_and_bills_it(session, cipher) -> Non
     callee = await make_bot(session, cipher, 2, "fr_bot", tools=["web_search", "ask_bots"])
     await session.commit()
     model = AnsweringModel("Bonjour")
-    delegate = Delegator(runtime_with(session, model, cipher), caller)
+    delegate = Delegator(runtime_with(session, model, cipher), caller, caller.owner)
 
     answer = await delegate("FR_bot", "Translate hello to French")
 
     assert answer == "Bonjour"
     # Depth 1: the callee keeps its tools but cannot delegate again.
     assert model.seen_tools == [["web_search"]]
-    billed = list(await session.scalars(select(UsageEvent.bot_id)))
-    assert billed == [callee.id]
+    billed = list(await session.execute(select(UsageEvent.bot_id, UsageEvent.payer_id)))
+    assert billed == [(callee.id, caller.owner_id)]
+
+
+async def test_whoever_asked_pays_and_never_uses_the_owners_key(session, cipher, redis) -> None:
+    caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
+    callee = await make_bot(session, cipher, 2, "fr_bot")
+    set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
+    ali = await get_or_create_user(session, 5005)
+    await session.commit()
+    runtime, _ = byok_runtime(session, cipher, redis, AnsweringModel("own key"))
+
+    answer = await Delegator(runtime, caller, ali)("fr_bot", "hello in French?")
+
+    assert answer == "platform"
+    assert runtime.models.built == []
+    event = await session.scalar(select(UsageEvent))
+    assert (event.payer_id, event.byok) == (ali.id, False)
 
 
 async def test_cannot_ask_bots_of_other_owners_or_itself(session, cipher) -> None:
     caller = await make_bot(session, cipher, 1, "asst_bot", tools=["ask_bots"])
     await make_bot(session, cipher, 3, "stranger_bot", owner=2002)
     await session.commit()
-    delegate = Delegator(runtime_with(session, AnsweringModel(), cipher), caller)
+    delegate = Delegator(runtime_with(session, AnsweringModel(), cipher), caller, caller.owner)
 
     assert (await delegate("stranger_bot", "hi")).startswith("ERROR")
     assert (await delegate("asst_bot", "hi")).startswith("ERROR")
@@ -185,7 +201,7 @@ async def test_callee_answers_with_its_own_key_for_free(session, cipher, redis) 
     await session.commit()
     runtime, sent = byok_runtime(session, cipher, redis, AnsweringModel("Bonjour (own key)"))
 
-    answer = await Delegator(runtime, caller)("fr_bot", "hello in French?")
+    answer = await Delegator(runtime, caller, caller.owner)("fr_bot", "hello in French?")
 
     assert answer == "Bonjour (own key)"
     assert runtime.models.built == [(Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")]
@@ -200,7 +216,7 @@ async def test_failing_own_key_tells_the_owner_once(session, cipher, redis) -> N
     set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
     await session.commit()
     runtime, sent = byok_runtime(session, cipher, redis, FailingModel())
-    delegate = Delegator(runtime, caller)
+    delegate = Delegator(runtime, caller, caller.owner)
 
     first = await delegate("fr_bot", "hello?")
     await delegate("fr_bot", "hello again?")

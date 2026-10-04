@@ -13,6 +13,7 @@ from sqlalchemy.orm import joinedload
 from obot.billing.plans import ModelPrice, Pricing
 from obot.bots.byok import set_key
 from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.bots.users import bot_settings
 from obot.chat.history import ChatScope
 from obot.core.byok import Provider
 from obot.db.models import Bot, BotStatus, ScheduleKind, Task, UsageEvent
@@ -128,7 +129,7 @@ def test_error_text() -> None:
 
     assert _error_text(failed, "en") == "step 2 (@fr_bot): the key is invalid or was revoked"
     assert _error_text(single, "en") == "the account is out of credit or rate-limited"
-    assert _error_text(quota, None).startswith("step 3 (@fr_bot): I've reached today's")
+    assert _error_text(quota, None).startswith("step 3 (@fr_bot): You've used today's")
     assert _error_text(ValueError("boom"), None) == "ValueError: boom"
 
 
@@ -236,7 +237,7 @@ async def test_peer_steps_check_availability_and_quota(session, cipher) -> None:
         await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
 
     peer.status = BotStatus.ACTIVE
-    peer.daily_credit_cap = 0
+    (await bot_settings(session, peer.owner, peer)).daily_credit_cap = 0
     with pytest.raises(StepFailed) as failed:
         await _run_chain(session, runtime, task, bot, NOW, ChatScope(bot.id, OWNER))
     assert failed.value.reason == "quota: bot_daily_cap"
@@ -264,7 +265,7 @@ async def test_steps_of_another_owners_bot_never_run(session, cipher) -> None:
 async def test_a_peer_first_step_checks_its_quota(session, cipher) -> None:
     bot = await make_bot(session, cipher, 1, "news_bot")
     peer = await make_bot(session, cipher, 2, "fr_bot")
-    peer.daily_credit_cap = 0
+    (await bot_settings(session, peer.owner, peer)).daily_credit_cap = 0
     task = await chain_of(session, bot, peer)
     task.steps = [task.steps[2], task.steps[0]]  # the peer goes first
     model = Scripted()

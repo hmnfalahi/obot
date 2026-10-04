@@ -76,7 +76,6 @@ class Bot(Base):
     byok_model: Mapped[str | None] = mapped_column(String(128))
     byok_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
-    daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[BotStatus] = mapped_column(
         Enum(
             BotStatus,
@@ -153,12 +152,13 @@ class ApiEndpoint(Base):
 class UsageEvent(Base):
     __tablename__ = "usage_events"
     __table_args__ = (
-        Index("ix_usage_events_owner_created", "owner_id", "created_at"),
+        Index("ix_usage_events_payer_created", "payer_id", "created_at"),
         Index("ix_usage_events_bot_created", "bot_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # Whoever started the request (SPEC 8.7); None: paid by Obot (group memory).
+    payer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
     kind: Mapped[UsageKind] = mapped_column(
         Enum(
@@ -173,7 +173,7 @@ class UsageEvent(Base):
     tokens_out: Mapped[int] = mapped_column(BigInteger, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8))
     credits: Mapped[int] = mapped_column(BigInteger)
-    # Paid with the owner's own key: free for them and not counted against plan limits.
+    # Paid with the payer's own key: free for them and not counted against plan limits.
     byok: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
@@ -238,6 +238,19 @@ class BotUser(Base):
     started_at: Mapped[datetime] = mapped_column(server_default=func.now())
     # Set when they blocked the bot or removed it from their list; None while they use it.
     left_at: Mapped[datetime | None]
+
+
+class UserBotSettings(Base):
+    """One person's own settings for a bot they use (SPEC 8.7)."""
+
+    __tablename__ = "user_bot_settings"
+    __table_args__ = (UniqueConstraint("user_id", "bot_id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
+    # Credits this person lets the bot spend per day; None: no cap.
+    daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class BotChat(Base):

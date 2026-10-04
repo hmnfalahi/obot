@@ -1,9 +1,11 @@
 """Usage metering and quota checks.
 
-Credits are computed for every call, also on the free plan, so per-bot daily
-caps work the same for everyone; they are only deducted on plans with
-`uses_credits`. Replies on the owner's own key (BYOK) are free and do not
-count as messages; their tool calls are metered as usual.
+Every call is paid by its payer: whoever started the request (SPEC 8.7), not
+the bot's owner. Credits are computed for every call, also on the free plan, so
+daily caps work the same for everyone; they are only deducted on plans with
+`uses_credits`. Replies on the payer's own key (BYOK) are free and do not count
+as messages; their tool calls are metered as usual. A payer of None means Obot
+pays (background work nobody asked for, like memory in groups).
 """
 
 import asyncio
@@ -16,7 +18,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
-from obot.db.models import Bot, UsageEvent, UsageKind, User
+from obot.db.models import Bot, UsageEvent, UsageKind, User, UserBotSettings
 
 
 class QuotaReason(enum.StrEnum):
@@ -40,49 +42,56 @@ def start_of_day(now: datetime, timezone: str) -> datetime:
     return local.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def allowed_tier(pricing: Pricing, owner: User, requested: str) -> str:
-    tiers = pricing.plan(owner.plan).model_tiers
+def allowed_tier(pricing: Pricing, payer: User, requested: str) -> str:
+    tiers = pricing.plan(payer.plan).model_tiers
     return requested if requested in tiers else tiers[0]
 
 
 async def check_llm_quota(
     session: AsyncSession,
     pricing: Pricing,
-    owner: User,
+    payer: User,
     bot: Bot,
     now: datetime,
     *,
     byok: bool = False,
 ) -> QuotaDecision:
-    """May the bot make a model call? `byok`: the call goes to the owner's own key."""
-    plan = pricing.plan(owner.plan)
-    since = start_of_day(now, owner.timezone)
+    """May `payer` have the bot make a model call? `byok`: it goes to the payer's own key."""
+    plan = pricing.plan(payer.plan)
+    since = start_of_day(now, payer.timezone)
 
     if plan.daily_llm_messages is not None and not byok:
-        used = await count_messages(session, owner, since)
+        used = await count_messages(session, payer, since)
         if used >= plan.daily_llm_messages:
             return QuotaDecision(QuotaReason.DAILY_MESSAGES)
 
-    if bot.daily_credit_cap is not None:
+    cap = await session.scalar(
+        select(UserBotSettings.daily_credit_cap).where(
+            UserBotSettings.user_id == payer.id, UserBotSettings.bot_id == bot.id
+        )
+    )
+    if cap is not None:
         spent = await session.scalar(
             select(func.coalesce(func.sum(UsageEvent.credits), 0)).where(
-                UsageEvent.bot_id == bot.id, UsageEvent.created_at >= since
+                UsageEvent.payer_id == payer.id,
+                UsageEvent.bot_id == bot.id,
+                UsageEvent.created_at >= since,
             )
         )
-        if spent >= bot.daily_credit_cap:
+        if spent >= cap:
             return QuotaDecision(QuotaReason.BOT_DAILY_CAP)
 
-    if plan.uses_credits and owner.credit_balance <= 0 and not byok:
+    if plan.uses_credits and payer.credit_balance <= 0 and not byok:
         return QuotaDecision(QuotaReason.NO_CREDITS)
 
     return QuotaDecision()
 
 
-async def count_messages(session: AsyncSession, owner: User, since: datetime) -> int:
+async def count_messages(session: AsyncSession, payer: User, since: datetime) -> int:
     """Replies since `since` that count against the plan's daily message limit."""
     return await session.scalar(
         select(func.count()).where(
-            UsageEvent.owner_id == owner.id,
+            UsageEvent.payer_id == payer.id,
             UsageEvent.kind == UsageKind.LLM,
             UsageEvent.byok.is_(False),
             UsageEvent.created_at >= since,
@@ -93,7 +102,7 @@ async def count_messages(session: AsyncSession, owner: User, since: datetime) ->
 async def record_llm_usage(
     session: AsyncSession,
     pricing: Pricing,
-    owner: User,
+    payer: User | None,
     bot: Bot,
     model: str,
     tokens_in: int,
@@ -104,10 +113,10 @@ async def record_llm_usage(
 ) -> UsageEvent:
     """Record a model call; MEMORY calls cost credits but do not count as messages.
 
-    `byok` calls are paid by the owner at their provider: recorded for statistics, free here.
+    `byok` calls are paid by the payer at their provider: recorded for statistics, free here.
     """
     event = UsageEvent(
-        owner_id=owner.id,
+        payer_id=payer.id if payer else None,
         bot_id=bot.id,
         kind=kind,
         model=model,
@@ -116,29 +125,29 @@ async def record_llm_usage(
         cost_usd=0 if byok else pricing.cost_usd(model, tokens_in, tokens_out),
         byok=byok,
     )
-    return await _record(session, pricing, owner, event)
+    return await _record(session, pricing, payer, event)
 
 
 async def record_tool_usage(
-    session: AsyncSession, pricing: Pricing, owner: User, bot: Bot, kind: UsageKind
+    session: AsyncSession, pricing: Pricing, payer: User, bot: Bot, kind: UsageKind
 ) -> UsageEvent:
     event = UsageEvent(
-        owner_id=owner.id, bot_id=bot.id, kind=kind, cost_usd=pricing.tools[kind.value]
+        payer_id=payer.id, bot_id=bot.id, kind=kind, cost_usd=pricing.tools[kind.value]
     )
-    return await _record(session, pricing, owner, event)
+    return await _record(session, pricing, payer, event)
 
 
 async def _record(
-    session: AsyncSession, pricing: Pricing, owner: User, event: UsageEvent
+    session: AsyncSession, pricing: Pricing, payer: User | None, event: UsageEvent
 ) -> UsageEvent:
     event.credits = pricing.credits_for(event.cost_usd) if event.cost_usd else 0
     session.add(event)
-    if pricing.plan(owner.plan).uses_credits and event.credits:
+    if payer is not None and pricing.plan(payer.plan).uses_credits and event.credits:
         # Atomic decrement so concurrent replies cannot overwrite each other;
-        # the ORM synchronizes `owner.credit_balance` in the session.
+        # the ORM synchronizes `payer.credit_balance` in the session.
         await session.execute(
             update(User)
-            .where(User.id == owner.id)
+            .where(User.id == payer.id)
             .values(credit_balance=User.credit_balance - event.credits)
         )
     await session.flush()
@@ -146,27 +155,27 @@ async def _record(
 
 
 async def check_tool_quota(
-    session: AsyncSession, pricing: Pricing, owner: User, kind: UsageKind, now: datetime
+    session: AsyncSession, pricing: Pricing, payer: User, kind: UsageKind, now: datetime
 ) -> QuotaReason | None:
-    plan = pricing.plan(owner.plan)
+    plan = pricing.plan(payer.plan)
     if kind == UsageKind.SEARCH:
         used = await session.scalar(
             select(func.count()).where(
-                UsageEvent.owner_id == owner.id,
+                UsageEvent.payer_id == payer.id,
                 UsageEvent.kind == UsageKind.SEARCH,
-                UsageEvent.created_at >= start_of_day(now, owner.timezone),
+                UsageEvent.created_at >= start_of_day(now, payer.timezone),
             )
         )
         if used >= plan.daily_web_searches:
             return QuotaReason.DAILY_SEARCHES
-    if plan.uses_credits and pricing.tools[kind.value] and owner.credit_balance <= 0:
+    if plan.uses_credits and pricing.tools[kind.value] and payer.credit_balance <= 0:
         return QuotaReason.NO_CREDITS
     return None
 
 
 TOOL_REFUSALS = {
-    QuotaReason.DAILY_SEARCHES: "the owner's daily web search limit is reached",
-    QuotaReason.NO_CREDITS: "the owner is out of credits",
+    QuotaReason.DAILY_SEARCHES: "the user's daily web search limit is reached",
+    QuotaReason.NO_CREDITS: "the user is out of credits",
 }
 
 
@@ -178,11 +187,11 @@ class UsageMeter:
     """
 
     def __init__(
-        self, session: AsyncSession, pricing: Pricing, owner: User, bot: Bot, now: datetime
+        self, session: AsyncSession, pricing: Pricing, payer: User, bot: Bot, now: datetime
     ) -> None:
         self._session = session
         self._pricing = pricing
-        self._owner = owner
+        self._payer = payer
         self._bot = bot
         self._now = now
         self._lock = asyncio.Lock()
@@ -190,12 +199,12 @@ class UsageMeter:
     async def before(self, kind: str) -> str | None:
         async with self._lock:
             reason = await check_tool_quota(
-                self._session, self._pricing, self._owner, UsageKind(kind), self._now
+                self._session, self._pricing, self._payer, UsageKind(kind), self._now
             )
         return TOOL_REFUSALS[reason] if reason else None
 
     async def after(self, kind: str) -> None:
         async with self._lock:
             await record_tool_usage(
-                self._session, self._pricing, self._owner, self._bot, UsageKind(kind)
+                self._session, self._pricing, self._payer, self._bot, UsageKind(kind)
             )
