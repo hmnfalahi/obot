@@ -11,13 +11,12 @@ import logging
 from datetime import UTC, datetime
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
-from obot.bots.byok import pays_with_key, reply_model
+from obot.bots.byok import reply_model
 from obot.bots.users import user_bots
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
 from obot.core.tools import truncate
 from obot.db.models import Bot, User
-from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -66,8 +65,12 @@ class Delegator:
             )
             if callee is None:
                 return f"ERROR: there is no active bot @{username} you can ask."
-            byok = pays_with_key(callee, payer)
-            quota = await check_llm_quota(session, runtime.pricing, payer, callee, now, byok=byok)
+            chosen = await reply_model(
+                session, runtime.models, runtime.cipher, runtime.pricing, callee, payer
+            )
+            quota = await check_llm_quota(
+                session, runtime.pricing, payer, callee, now, byok=chosen.byok
+            )
             if not quota.allowed:
                 return f"ERROR: @{username} cannot answer right now (usage limit reached)."
 
@@ -89,7 +92,6 @@ class Delegator:
                 ),
             )
             try:
-                chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, callee, payer)
                 reply = await generate_reply(
                     chosen.model,
                     BotProfile(name=callee.display_name, persona=callee.persona),
@@ -102,8 +104,8 @@ class Delegator:
             except Exception as e:
                 log.exception("delegation to bot %s failed", callee.id)
                 await session.commit()  # keep metered tool use
-                if byok and (failure := failure_of(e)) is not None:
-                    await notify_key_failure(runtime, callee, failure, now)
+                if chosen.byok and (failure := failure_of(e)) is not None:
+                    return f"ERROR: @{username} failed: the user's own key: {failure}."
                 return f"ERROR: @{username} failed to answer."
             await record_llm_usage(
                 session,

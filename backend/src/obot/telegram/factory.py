@@ -104,7 +104,9 @@ def card_keyboard(
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, command: CommandObject, session: AsyncSession) -> None:
+async def on_start(
+    message: Message, command: CommandObject, session: AsyncSession, runtime: Runtime
+) -> None:
     user = message.from_user
     owner = await get_or_create_user(session, user.id, user.language_code)
     lang = lang_of(user.language_code)
@@ -112,6 +114,16 @@ async def on_start(message: Message, command: CommandObject, session: AsyncSessi
     if (command.args or "").startswith("access_"):
         await ask_for_people(message, session, owner, lang, command.args.removeprefix("access_"))
         return
+    # Bots send people here for their own settings of that bot: start=mine_<bot id>
+    bot_id = (command.args or "").removeprefix("mine_")
+    if command.args and command.args.startswith("mine_") and bot_id.isdigit():
+        url = runtime.settings_url(int(bot_id))
+        if url:
+            await message.answer(
+                t(lang, "factory.my_settings"),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[panel_button(lang, url)]]),
+            )
+            return
     await message.answer(t(lang, "factory.welcome"))
 
 

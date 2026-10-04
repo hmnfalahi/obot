@@ -15,11 +15,19 @@ from sqlalchemy.orm import joinedload
 
 from obot.billing.plans import Pricing
 from obot.billing.usage import QuotaReason, check_llm_quota, count_messages, record_llm_usage
-from obot.bots.byok import clear_key, key_hint, read_key, reply_model, set_key, uses_byok
+from obot.bots.byok import (
+    delete_key,
+    key_hint,
+    read_key,
+    reply_model,
+    save_key,
+    wallet,
+    wallet_key,
+)
 from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
 from obot.bots.users import bot_settings
 from obot.core.byok import Byok, Failure, KeyCheckFailed, Provider, failure_of
-from obot.db.models import Bot, UsageEvent
+from obot.db.models import Bot, BotVisibility, UsageEvent
 from tests.test_api import ALICE, BOB, auth
 from tests.test_api import make_bot as make_api_bot
 
@@ -63,60 +71,81 @@ def test_failure_of(exc, failure) -> None:
     assert failure_of(exc) == failure
 
 
-# --- storage and model choice ---------------------------------------------------------------
+# --- the wallet and model choice -----------------------------------------------------------
 
 
-async def test_key_is_encrypted_and_bound_to_the_bot(session, cipher) -> None:
-    bot = await make_bot(session, cipher, 1)
-    other = await make_bot(session, cipher, 2)
+async def use_own_key(session, cipher, user, bot, provider, model, api_key=KEY) -> None:
+    """Put a key in `user`'s wallet and pick it with `model` for `bot`."""
+    await save_key(session, cipher, user, provider, api_key)
+    settings = await bot_settings(session, user, bot)
+    settings.key_provider, settings.model = provider.value, model
+    await session.flush()
 
-    set_key(cipher, bot, Provider.OPENAI, "gpt-5-mini", KEY)
 
-    assert uses_byok(bot)
-    assert KEY.encode() not in bot.byok_key_encrypted
-    assert read_key(cipher, bot) == KEY
-    assert key_hint(cipher, bot) == "…abcd"
-    other.byok_key_encrypted = bot.byok_key_encrypted
+async def test_wallet_keys_are_encrypted_and_bound_to_their_user(session, cipher) -> None:
+    ali = await get_or_create_user(session, 5005)
+    sara = await get_or_create_user(session, 6006)
+
+    row = await save_key(session, cipher, ali, Provider.OPENAI, KEY)
+    replaced = await save_key(session, cipher, ali, Provider.OPENAI, KEY[:-4] + "wxyz")
+
+    assert replaced.id == row.id and len(await wallet(session, ali)) == 1
+    assert KEY.encode() not in row.key_encrypted
+    assert key_hint(cipher, row) == "…wxyz"
+    stolen = await save_key(session, cipher, sara, Provider.OPENAI, "sk-sara-0000")
+    stolen.key_encrypted = row.key_encrypted
     with pytest.raises(InvalidTag):
-        read_key(cipher, other)
+        read_key(cipher, stolen)
 
-    clear_key(bot)
-    assert not uses_byok(bot)
-    assert (bot.byok_provider, bot.byok_model) == (None, None)
+    await delete_key(session, ali, Provider.OPENAI)
+    assert await wallet_key(session, ali, "openai") is None
 
 
-async def test_reply_model_prefers_the_bots_own_key(session, cipher, pricing) -> None:
-    bot = await make_bot(session, cipher)
-    tier_model = TestModel()
+def fake_models(tier_model):
     built = []
 
     def build(provider, name, api_key):
         built.append((provider, name, api_key))
         return "byok-model"
 
-    models = SimpleNamespace(for_tier=lambda tier: tier_model, byok=SimpleNamespace(model=build))
+    return SimpleNamespace(
+        for_tier=lambda tier: tier_model, byok=SimpleNamespace(model=build)
+    ), built
 
-    owner = bot.owner
-    assert reply_model(models, cipher, pricing, bot, owner).byok is False
-    assert reply_model(models, cipher, pricing, bot, owner).model is tier_model
 
-    set_key(cipher, bot, Provider.ANTHROPIC, "claude-haiku-4-5", KEY)
-    chosen = reply_model(models, cipher, pricing, bot, owner)
+async def test_each_person_answers_with_their_own_key_and_model(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    ali = await get_or_create_user(session, 5005)
+    tier_model = TestModel()
+    models, built = fake_models(tier_model)
+
+    assert (await reply_model(session, models, cipher, pricing, bot, ali)).model is tier_model
+
+    await use_own_key(session, cipher, ali, bot, Provider.ANTHROPIC, "claude-haiku-4-5")
+    chosen = await reply_model(session, models, cipher, pricing, bot, ali)
+    owner_chosen = await reply_model(session, models, cipher, pricing, bot, bot.owner)
 
     assert chosen.byok is True and chosen.model == "byok-model"
     assert built == [(Provider.ANTHROPIC, "claude-haiku-4-5", KEY)]
+    assert owner_chosen.byok is False  # Ali's key is never used for anyone else
+
+    await delete_key(session, ali, Provider.ANTHROPIC)  # the bot falls back to Obot's
+    assert (await reply_model(session, models, cipher, pricing, bot, ali)).byok is False
 
 
-async def test_owner_key_is_never_used_for_others(session, cipher, pricing) -> None:
+async def test_recommended_tier_beyond_the_plan_is_downgraded(session, cipher, pricing) -> None:
     bot = await make_bot(session, cipher)
-    set_key(cipher, bot, Provider.ANTHROPIC, "claude-haiku-4-5", KEY)
+    bot.model_tier = "strong"
     ali = await get_or_create_user(session, 5005)
-    tier_model = TestModel()
-    models = SimpleNamespace(for_tier=lambda tier: tier_model, byok=None)
+    tiers = []
+    models = SimpleNamespace(for_tier=lambda tier: tiers.append(tier) or TestModel(), byok=None)
 
-    chosen = reply_model(models, cipher, pricing, bot, ali)
+    free = await reply_model(session, models, cipher, pricing, bot, ali)
+    ali.plan = "paid"
+    paid = await reply_model(session, models, cipher, pricing, bot, ali)
 
-    assert chosen.byok is False and chosen.model is tier_model
+    assert tiers == ["cheap", "strong"]
+    assert free.downgraded and not paid.downgraded
 
 
 def test_models_are_built_for_each_provider() -> None:
@@ -242,78 +271,78 @@ async def test_byok_ignores_message_limit_and_balance_but_not_the_bot_cap(
 # --- API ------------------------------------------------------------------------------------
 
 
-async def test_set_byok_checks_and_stores_the_key(api) -> None:
+async def test_wallet_api_never_returns_keys(api) -> None:
+    put = await api.put("/api/keys/openai", json={"api_key": f"  {KEY} "}, headers=auth(BOB))
+    listed = await api.get("/api/keys", headers=auth(BOB))
+    others = await api.get("/api/keys", headers=auth(ALICE))
+    removed = await api.delete("/api/keys/openai", headers=auth(BOB))
+
+    assert put.json() == [{"provider": "openai", "key_hint": "…abcd"}] == listed.json()
+    assert KEY not in put.text and others.json() == [] and removed.json() == []
+
+
+async def public_api_bot(api) -> int:
     bot_id = await make_api_bot(api, ALICE, 50)
-    body = {"provider": "openai", "model": "gpt-5-mini", "api_key": f"  {KEY} "}
-
-    response = await api.put(f"/api/bots/{bot_id}/byok", json=body, headers=auth(ALICE))
-
-    assert response.status_code == 200, response.text
-    assert response.json()["byok"] == {
-        "provider": "openai",
-        "model": "gpt-5-mini",
-        "key_hint": "…abcd",
-    }
-    assert KEY not in response.text
-    assert api.state.models.byok.checked == [("openai", "gpt-5-mini", KEY)]
     async with api.state.sessionmaker() as session:
         bot = await session.get(Bot, bot_id)
-        assert read_key(api.state.cipher, bot) == KEY
+        bot.visibility, bot.recommended_model = BotVisibility.PUBLIC, "claude-sonnet-5.5"
+        await session.commit()
+    return bot_id
 
 
-async def test_failed_check_is_reported_and_not_stored(api) -> None:
-    bot_id = await make_api_bot(api, ALICE, 50)
+async def test_a_user_picks_their_key_and_model_for_a_bot(api) -> None:
+    bot_id = await public_api_bot(api)
+    await api.put("/api/keys/anthropic", json={"api_key": KEY}, headers=auth(BOB))
+    url = f"/api/bots/{bot_id}/mine"
+
+    before = (await api.get(url, headers=auth(BOB))).json()
+    body = {"key_provider": "anthropic", "model": "claude-sonnet-5.5", "daily_credit_cap": 50}
+    saved = await api.put(url, json=body, headers=auth(BOB))
+
+    assert before["recommended_model"] == "claude-sonnet-5.5" and before["wallet"] == ["anthropic"]
+    assert saved.status_code == 200, saved.text
+    assert (saved.json()["key_provider"], saved.json()["model"]) == (
+        "anthropic",
+        "claude-sonnet-5.5",
+    )
+    assert saved.json()["daily_credit_cap"] == 50 and not saved.json()["is_owner"]
+    assert api.state.models.byok.checked == [("anthropic", "claude-sonnet-5.5", KEY)]
+    alice_view = (await api.get(url, headers=auth(ALICE))).json()
+    assert alice_view["key_provider"] is None  # settings are each person's own
+
+
+async def test_failed_check_is_reported_and_not_saved(api) -> None:
+    bot_id = await public_api_bot(api)
+    await api.put("/api/keys/openai", json={"api_key": KEY}, headers=auth(BOB))
     api.state.models.byok.failure = Failure.AUTH
-    body = {"provider": "anthropic", "model": "claude-haiku-4-5", "api_key": KEY}
+    url = f"/api/bots/{bot_id}/mine"
 
-    response = await api.put(f"/api/bots/{bot_id}/byok", json=body, headers=auth(ALICE))
-
-    assert response.status_code == 422
-    assert response.json()["detail"] == "auth"
-    detail = await api.get(f"/api/bots/{bot_id}", headers=auth(ALICE))
-    assert detail.json()["byok"] is None
-
-
-async def test_switching_model_keeps_the_key_of_the_same_provider(api) -> None:
-    bot_id = await make_api_bot(api, ALICE, 50)
-    url = f"/api/bots/{bot_id}/byok"
-    first = {"provider": "openrouter", "model": "a/one", "api_key": KEY}
-    await api.put(url, json=first, headers=auth(ALICE))
-
-    switched = await api.put(
-        url, json={"provider": "openrouter", "model": "b/two"}, headers=auth(ALICE)
+    response = await api.put(
+        url, json={"key_provider": "openai", "model": "gpt-5-mini"}, headers=auth(BOB)
     )
-    other_provider = await api.put(
-        url, json={"provider": "openai", "model": "gpt-5-mini"}, headers=auth(ALICE)
+    missing = await api.put(
+        url, json={"key_provider": "openrouter", "model": "a/b"}, headers=auth(BOB)
     )
 
-    assert switched.json()["byok"]["model"] == "b/two"
-    assert api.state.models.byok.checked[-1] == ("openrouter", "b/two", KEY)
-    assert other_provider.status_code == 422
+    assert (response.status_code, response.json()["detail"]) == (422, "auth")
+    assert missing.status_code == 422
+    assert (await api.get(url, headers=auth(BOB))).json()["key_provider"] is None
 
 
-async def test_delete_byok_and_ownership(api) -> None:
-    bot_id = await make_api_bot(api, ALICE, 50)
-    url = f"/api/bots/{bot_id}/byok"
-    body = {"provider": "openai", "model": "gpt-5-mini", "api_key": KEY}
+async def test_private_bots_settings_are_not_reachable_by_strangers(api) -> None:
+    bot_id = await make_api_bot(api, ALICE, 51)
 
-    assert (await api.put(url, json=body, headers=auth(BOB))).status_code == 404
-    assert (await api.delete(url, headers=auth(BOB))).status_code == 404
-    await api.put(url, json=body, headers=auth(ALICE))
-    deleted = await api.delete(url, headers=auth(ALICE))
-
-    assert deleted.json()["byok"] is None
-    async with api.state.sessionmaker() as session:
-        bot = await session.get(Bot, bot_id)
-        assert bot.byok_key_encrypted is None
+    assert (await api.get(f"/api/bots/{bot_id}/mine", headers=auth(BOB))).status_code == 404
+    assert (await api.get(f"/api/bots/{bot_id}/mine", headers=auth(ALICE))).json()["is_owner"]
 
 
 @pytest.mark.parametrize("model", ["", "a b", "x" * 200, "../etc"])
 async def test_invalid_model_names_are_rejected(api, model) -> None:
-    bot_id = await make_api_bot(api, ALICE, 50)
-    body = {"provider": "openai", "model": model, "api_key": KEY}
+    bot_id = await public_api_bot(api)
+    await api.put("/api/keys/openai", json={"api_key": KEY}, headers=auth(BOB))
+    body = {"key_provider": "openai", "model": model}
 
-    response = await api.put(f"/api/bots/{bot_id}/byok", json=body, headers=auth(ALICE))
+    response = await api.put(f"/api/bots/{bot_id}/mine", json=body, headers=auth(BOB))
 
     assert response.status_code == 422
     assert api.state.models.byok.checked == []

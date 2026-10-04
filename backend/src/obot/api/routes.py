@@ -15,13 +15,13 @@ from obot.api.schemas import (
     BotDetail,
     BotSummary,
     BotUpdate,
-    ByokIn,
-    ByokOut,
     ChatOut,
     InvoiceIn,
     InvoiceOut,
     MeOut,
     MeUpdate,
+    MySettingsIn,
+    MySettingsOut,
     NewBotIn,
     NewBotOut,
     PackageOut,
@@ -31,21 +31,23 @@ from obot.api.schemas import (
     TaskUpdate,
     UsageDay,
     UsedBotOut,
+    WalletKeyIn,
+    WalletKeyOut,
 )
 from obot.billing.usage import count_messages, start_of_day
-from obot.bots.access import sync_access
+from obot.bots.access import can_use, sync_access
 from obot.bots.apis import ensure_room, list_endpoints, read_headers, write_endpoint
-from obot.bots.byok import clear_key, key_hint, read_key, set_key, uses_byok
+from obot.bots.byok import delete_key, key_hint, read_key, save_key, wallet, wallet_key
 from obot.bots.users import bot_settings, leave_bot, user_bots
 from obot.chat.membership import list_memberships
-from obot.core.byok import KeyCheckFailed
+from obot.core.byok import KeyCheckFailed, Provider
 from obot.core.custom_api import PLACEHOLDER, InvalidEndpoint
 from obot.core.fetch import FetchError, ensure_public_host
-from obot.crypto import TokenCipher
 from obot.db.models import (
     ApiEndpoint,
     Bot,
     BotChat,
+    BotStatus,
     BotUser,
     BotVisibility,
     DraftState,
@@ -183,12 +185,6 @@ async def _task_out(session: Session, task: Task, user: User) -> TaskOut:
     )
 
 
-def _byok(cipher: TokenCipher, bot: Bot) -> ByokOut | None:
-    if not uses_byok(bot):
-        return None
-    return ByokOut(provider=bot.byok_provider, model=bot.byok_model, key_hint=key_hint(cipher, bot))
-
-
 async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
     persona = bot.persona or {}
     return BotDetail(
@@ -196,7 +192,7 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
         system_prompt=persona.get("system_prompt", ""),
         language=persona.get("language", "fa"),
         model_tier=bot.model_tier,
-        byok=_byok(state.cipher, bot),
+        recommended_model=bot.recommended_model,
         apis=[
             ApiOut(
                 id=row.id,
@@ -208,8 +204,6 @@ async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
             )
             for row in await list_endpoints(session, bot)
         ],
-        # The owner's own cap: everyone else sets theirs (SPEC 8.7).
-        daily_credit_cap=(await bot_settings(session, bot.owner, bot)).daily_credit_cap,
         allowed_users=[AllowedUserOut(**u) for u in bot.allowed_users or []],
         users_count=await session.scalar(
             select(func.count()).where(BotUser.bot_id == bot.id, BotUser.left_at.is_(None))
@@ -288,14 +282,11 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
     bot.persona = persona
     if body.tools is not None:
         bot.tools = [t.value for t in body.tools]
+    # Recommendations only: each person gets what their plan or own key allows.
     if body.model_tier is not None:
-        if body.model_tier not in state.pricing.plan(bot.owner.plan).model_tiers:
-            raise HTTPException(403, "this model needs the paid plan")
         bot.model_tier = body.model_tier
-    if body.clear_daily_credit_cap:
-        (await bot_settings(session, bot.owner, bot)).daily_credit_cap = None
-    elif body.daily_credit_cap is not None:
-        (await bot_settings(session, bot.owner, bot)).daily_credit_cap = body.daily_credit_cap
+    if body.recommended_model is not None:
+        bot.recommended_model = body.recommended_model.strip() or None
     access_changed = False
     if body.visibility is not None and body.visibility != bot.visibility:
         bot.visibility = BotVisibility(body.visibility)
@@ -322,32 +313,89 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
     return await _detail(session, state, bot)
 
 
-@router.put("/bots/{bot_id}/byok")
-async def set_byok(body: ByokIn, bot: OwnedBot, session: Session, state: State) -> BotDetail:
-    """Store the bot's own provider key after checking that it works with the model.
+# --- the user's key wallet and their own settings per bot (SPEC 8.7) --------------------------
+
+
+@router.get("/keys")
+async def list_keys(user: CurrentUser, session: Session, state: State) -> list[WalletKeyOut]:
+    return [
+        WalletKeyOut(provider=row.provider, key_hint=key_hint(state.cipher, row))
+        for row in await wallet(session, user)
+    ]
+
+
+@router.put("/keys/{provider}")
+async def put_key(
+    provider: Provider, body: WalletKeyIn, user: CurrentUser, session: Session, state: State
+) -> list[WalletKeyOut]:
+    """Store a key; it is checked when the user picks it for a bot, with a model."""
+    await save_key(session, state.cipher, user, provider, body.api_key.strip())
+    return await list_keys(user, session, state)
+
+
+@router.delete("/keys/{provider}")
+async def remove_key(
+    provider: Provider, user: CurrentUser, session: Session, state: State
+) -> list[WalletKeyOut]:
+    await delete_key(session, user, provider)
+    return await list_keys(user, session, state)
+
+
+async def _usable_bot(session: Session, user: User, bot_id: int) -> Bot:
+    bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+    if bot is None or bot.status != BotStatus.ACTIVE or not can_use(bot, user.tg_user_id):
+        raise HTTPException(404, "bot not found")
+    return bot
+
+
+async def _my_settings(session: Session, user: User, bot: Bot) -> MySettingsOut:
+    settings = await bot_settings(session, user, bot)
+    return MySettingsOut(
+        bot_id=bot.id,
+        username=bot.username,
+        display_name=bot.display_name,
+        is_owner=bot.owner_id == user.id,
+        model_tier=bot.model_tier,
+        recommended_model=bot.recommended_model,
+        key_provider=settings.key_provider,
+        model=settings.model,
+        daily_credit_cap=settings.daily_credit_cap,
+        wallet=[row.provider for row in await wallet(session, user)],
+    )
+
+
+@router.get("/bots/{bot_id}/mine")
+async def get_my_settings(bot_id: int, user: CurrentUser, session: Session) -> MySettingsOut:
+    return await _my_settings(session, user, await _usable_bot(session, user, bot_id))
+
+
+@router.put("/bots/{bot_id}/mine")
+async def put_my_settings(
+    bot_id: int, body: MySettingsIn, user: CurrentUser, session: Session, state: State
+) -> MySettingsOut:
+    """Pick a key from the wallet and a model for this bot, checked before it is saved.
 
     A failed check answers 422 with the reason (auth, quota, model, provider) as detail.
     """
-    api_key = body.api_key
-    if api_key is None:
-        if not uses_byok(bot) or bot.byok_provider != body.provider:
-            raise HTTPException(422, "api_key is required")
-        api_key = read_key(state.cipher, bot)
-    api_key = api_key.strip()
-    try:
-        await state.models.byok.check(body.provider, body.model, api_key)
-    except KeyCheckFailed as e:
-        raise HTTPException(422, e.failure.value) from e
-    set_key(state.cipher, bot, body.provider, body.model, api_key)
+    bot = await _usable_bot(session, user, bot_id)
+    settings = await bot_settings(session, user, bot)
+    if body.key_provider is not None:
+        key = await wallet_key(session, user, body.key_provider)
+        if key is None:
+            raise HTTPException(422, "that key is not in your wallet")
+        if not body.model:
+            raise HTTPException(422, "a model is required with your own key")
+        try:
+            await state.models.byok.check(
+                body.key_provider, body.model, read_key(state.cipher, key)
+            )
+        except KeyCheckFailed as e:
+            raise HTTPException(422, e.failure.value) from e
+    settings.key_provider = body.key_provider.value if body.key_provider else None
+    settings.model = body.model if body.key_provider else None
+    settings.daily_credit_cap = body.daily_credit_cap
     await session.flush()
-    return await _detail(session, state, bot)
-
-
-@router.delete("/bots/{bot_id}/byok")
-async def delete_byok(bot: OwnedBot, session: Session, state: State) -> BotDetail:
-    clear_key(bot)
-    await session.flush()
-    return await _detail(session, state, bot)
+    return await _my_settings(session, user, bot)
 
 
 @router.get("/bots/{bot_id}/usage")

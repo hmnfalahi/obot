@@ -76,12 +76,10 @@ class Bot(Base):
     # AES-GCM, bound to tg_bot_id; see obot.crypto
     token_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
     persona: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # The tier the owner recommends; each person gets it if their plan allows it.
     model_tier: Mapped[str] = mapped_column(String(32), default="cheap")
-    # Bring your own key: replies use the owner's provider account instead of model_tier.
-    # The key is AES-GCM encrypted, bound to the bot id; see obot.bots.byok.
-    byok_provider: Mapped[str | None] = mapped_column(String(16))
-    byok_model: Mapped[str | None] = mapped_column(String(128))
-    byok_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # The model the owner suggests to people using their own key, e.g. "claude-sonnet-5.5".
+    recommended_model: Mapped[str | None] = mapped_column(String(128))
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     visibility: Mapped[BotVisibility] = mapped_column(
         Enum(
@@ -270,6 +268,25 @@ class UserBotSettings(Base):
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
     # Credits this person lets the bot spend per day; None: no cap.
     daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
+    # Their own key (from their wallet) and model for this bot; None: Obot's models.
+    key_provider: Mapped[str | None] = mapped_column(String(16))
+    model: Mapped[str | None] = mapped_column(String(128))
+
+
+class ProviderKey(Base):
+    """A key a person keeps in their wallet for a model provider (SPEC 8.7).
+
+    AES-GCM encrypted, bound to the user and provider; see obot.bots.byok.
+    """
+
+    __tablename__ = "provider_keys"
+    __table_args__ = (UniqueConstraint("user_id", "provider"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(16))
+    key_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class BotChat(Base):

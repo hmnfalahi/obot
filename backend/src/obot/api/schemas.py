@@ -93,17 +93,36 @@ class TaskOut(BaseModel):
     steps: list[StepOut]
 
 
-class ByokOut(BaseModel):
+class WalletKeyOut(BaseModel):
     provider: Provider
-    model: str
     key_hint: str
 
 
-class ByokIn(BaseModel):
-    provider: Provider
-    model: str = Field(pattern=f"^{MODEL_NAME.pattern}$")
-    # Omitted: keep the stored key (same provider only), e.g. to switch models.
-    api_key: str | None = Field(default=None, min_length=8, max_length=512)
+class WalletKeyIn(BaseModel):
+    api_key: str = Field(min_length=8, max_length=512)
+
+
+class MySettingsOut(BaseModel):
+    """One person's own settings for a bot they use (SPEC 8.7)."""
+
+    bot_id: int
+    username: str
+    display_name: str
+    is_owner: bool
+    # What the owner recommends: Obot's tier, and a model for people's own keys.
+    model_tier: str
+    recommended_model: str | None
+    key_provider: Provider | None
+    model: str | None
+    daily_credit_cap: int | None
+    wallet: list[Provider]
+
+
+class MySettingsIn(BaseModel):
+    # None: answer with Obot's models (no own key).
+    key_provider: Provider | None = None
+    model: str | None = Field(default=None, pattern=f"^{MODEL_NAME.pattern}$")
+    daily_credit_cap: int | None = Field(default=None, ge=0)
 
 
 class ApiOut(BaseModel):
@@ -129,9 +148,8 @@ class BotDetail(BotSummary):
     system_prompt: str
     language: str
     model_tier: str
-    byok: ByokOut | None
+    recommended_model: str | None
     apis: list[ApiOut]
-    daily_credit_cap: int | None
     allowed_users: list[AllowedUserOut]
     # How many people use the bot and in how many groups; never what they say (SPEC 8.7).
     users_count: int
@@ -160,8 +178,7 @@ class BotUpdate(BaseModel):
     language: str | None = Field(default=None, max_length=8)
     tools: list[ToolName] | None = None
     model_tier: Literal["cheap", "strong"] | None = None
-    daily_credit_cap: int | None = Field(default=None, ge=0)
-    clear_daily_credit_cap: bool = False
+    recommended_model: str | None = Field(default=None, max_length=128)
     visibility: Literal["private", "public"] | None = None
     # People to keep sharing a private bot with; adding people goes through the factory.
     allowed_user_ids: list[int] | None = None

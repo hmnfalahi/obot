@@ -187,3 +187,22 @@ async def test_suspended_people_are_not_served(session, cipher) -> None:
     await bots_module._respond(inbound, "hi", None, None, session, record, ali, runtime)
 
     runtime.sender.send_text.assert_not_awaited()
+
+
+async def test_stronger_model_hint_is_given_once(session, cipher, redis) -> None:
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, "fa")
+    runtime = SimpleNamespace(redis=redis, sender=AsyncMock())
+    inbound = bots_module.Inbound(
+        client=AsyncMock(),
+        chat_id=ALI.id,
+        message_id=1,
+        sender_name="Ali",
+        sender_language="fa",
+        group=False,
+    )
+
+    for _ in range(2):
+        await bots_module.suggest_stronger_model(inbound, record, ali, runtime)
+
+    assert runtime.sender.send_text.await_count == 1

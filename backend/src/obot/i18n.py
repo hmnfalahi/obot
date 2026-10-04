@@ -52,6 +52,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "To use me, start me in private first.",
         "task.draft": "⏰ New task: {summary}\nNext run: {when}\nSends to: {where}",
         "task.to_me": "you, here",
+        "bot.settings": "Your own key, model and daily limit for me are in your Obot panel.",
+        "btn.my_settings": "Open my settings",
+        "factory.my_settings": "Your settings for that bot:",
         "bot.hello": (
             "Hi! I'm {name}. {description}\n\nAsk me anything. I can also do things for you on "
             "a schedule, e.g. every morning; /tasks lists them."
@@ -107,10 +110,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "receipt.received": "Receipt received. We'll add your credits after checking it.",
         "receipt.granted": "✅ {credits} credits added. Balance: {balance}.",
         "receipt.rejected": "Your receipt could not be confirmed. Please contact support.",
-        "byok.chat_failed": "Sorry, I can't reply right now. My owner has been told.",
-        "owner.byok_failed": (
-            "⚠️ @{username} could not reply with your {provider} key: {reason}. "
-            "Check the key in the bot's settings in the panel."
+        "byok.chat_failed": (
+            "I couldn't reply with your own key: {reason}. Check it in your Obot panel."
+        ),
+        "model.suggest": (
+            "Heads-up: this bot works best with a stronger model than your plan includes. "
+            "Top up credits, or set your own key for it in your Obot panel."
         ),
         "byok.reason.auth": "the key is invalid or was revoked",
         "byok.reason.quota": "the account is out of credit or rate-limited",
@@ -166,6 +171,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "برای استفاده از من، اول توی پیوی استارتم کن.",
         "task.draft": "⏰ کار جدید: {summary}\nاجرای بعدی: {when}\nارسال به: {where}",
         "task.to_me": "خودت، همین‌جا",
+        "bot.settings": "کلید و مدل خودت و سقف مصرف روزانه‌ات برای من توی پنل Obot هست.",
+        "btn.my_settings": "باز کردن تنظیماتم",
+        "factory.my_settings": "تنظیمات تو برای اون ربات:",
         "bot.hello": (
             "سلام! من {name} هستم. {description}\n\nهر چی می‌خوای بپرس. می‌تونم کارهایی رو هم "
             "سر وقت برات انجام بدم، مثلاً هر روز صبح؛ /tasks فهرستشون رو نشون می‌ده."
@@ -219,10 +227,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "receipt.received": "رسید دریافت شد. بعد از بررسی اعتبارت اضافه می‌شه.",
         "receipt.granted": "✅ {credits} اعتبار اضافه شد. موجودی: {balance}.",
         "receipt.rejected": "رسیدت تأیید نشد. لطفاً با پشتیبانی تماس بگیر.",
-        "byok.chat_failed": "ببخشید، الان نمی‌تونم جواب بدم. به صاحبم خبر دادم.",
-        "owner.byok_failed": (
-            "⚠️ @{username} با کلید {provider} تو نتونست جواب بده: {reason}. "
-            "کلید رو در تنظیمات ربات در پنل بررسی کن."
+        "byok.chat_failed": "نتونستم با کلید خودت جواب بدم: {reason}. توی پنل Obot بررسیش کن.",
+        "model.suggest": (
+            "این ربات با مدلی قوی‌تر از پلن تو بهتر کار می‌کنه. اعتبار بخر یا توی پنل Obot "
+            "کلید خودت رو براش بذار."
         ),
         "byok.reason.auth": "کلید نامعتبره یا باطل شده",
         "byok.reason.quota": "اعتبار حساب تموم شده یا محدودیت نرخ خورده",

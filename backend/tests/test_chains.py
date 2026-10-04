@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from obot.billing.plans import ModelPrice, Pricing
-from obot.bots.byok import set_key
 from obot.bots.service import ManagedBotInfo, register_managed_bot
 from obot.bots.users import bot_settings
 from obot.chat.history import ChatScope
@@ -20,6 +19,7 @@ from obot.db.models import Bot, BotStatus, ScheduleKind, Task, UsageEvent
 from obot.tasks.planner import KnownBot, PlannedStep, PlannedTask, build_prompt
 from obot.tasks.service import build_tasks
 from obot.telegram.task_runner import StepFailed, _error_text, _run_chain, step_prompt
+from tests.test_byok import use_own_key
 
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
 NOW = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
@@ -213,7 +213,7 @@ async def test_chain_feeds_each_output_to_the_next_step(session, cipher) -> None
 async def test_failing_step_names_the_step_and_bot(session, cipher) -> None:
     bot = await make_bot(session, cipher, 1, "news_bot")
     peer = await make_bot(session, cipher, 2, "fr_bot")
-    set_key(cipher, peer, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
+    await use_own_key(session, cipher, peer.owner, peer, Provider.OPENAI, "gpt-5-mini")
     task = await chain_of(session, bot, peer)
     runtime = runtime_for(session, cipher, Scripted(fail_for="fr_bot"))
 

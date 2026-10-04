@@ -10,7 +10,7 @@ from sqlalchemy.orm import joinedload
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
 from obot.bots.access import can_use
-from obot.bots.byok import pays_with_key, reply_model
+from obot.bots.byok import reply_model
 from obot.bots.users import has_started, user_bots
 from obot.chat.history import ChatScope, record_message
 from obot.core.agent import BotProfile, generate_reply
@@ -116,7 +116,9 @@ async def _run_step(
         memories = await recall_facts(
             session, runtime.pricing, bot_record, payer, scope, recall_query, runtime.embedder
         )
-    chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record, payer)
+    chosen = await reply_model(
+        session, runtime.models, runtime.cipher, runtime.pricing, bot_record, payer
+    )
     # Another bot doing a step works like ask_bot: it cannot delegate further.
     kit = await toolkit(session, runtime, bot_record, started, payer, delegation=own)
     reply = await generate_reply(
@@ -142,6 +144,11 @@ async def _run_step(
     return reply.text
 
 
+async def _uses_own_key(session, runtime: Runtime, bot: BotRecord, payer: User) -> bool:
+    chosen = await reply_model(session, runtime.models, runtime.cipher, runtime.pricing, bot, payer)
+    return chosen.byok
+
+
 def _step_failed(
     e: Exception, index: int, bot: BotRecord, byok: bool, *, numbered: bool = True
 ) -> StepFailed:
@@ -164,7 +171,7 @@ async def _run_chain(
     output: str | None = None
     for index, step in enumerate(task.steps):
         step_bot = await _step_bot(session, bot_record, payer, step.get("bot_id"), index)
-        byok = pays_with_key(step_bot, payer)
+        byok = await _uses_own_key(session, runtime, step_bot, payer)
         if index > 0 or step_bot is not bot_record:
             # execute_task checked the task's own bot before its first step.
             quota = await check_llm_quota(
@@ -247,7 +254,7 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
                     )
                 return
 
-            byok = pays_with_key(bot_record, user)
+            byok = await _uses_own_key(session, runtime, bot_record, user)
             quota = await check_llm_quota(
                 session, runtime.pricing, user, bot_record, started, byok=byok
             )

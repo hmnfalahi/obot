@@ -1,23 +1,21 @@
 import { useState } from 'react'
 import {
   api,
-  ApiError,
   METHODS,
-  PROVIDERS,
   TOOLS,
   type ApiEndpoint,
   type BotDetail,
   type HttpMethod,
   type Me,
-  type Provider,
   type ToolName,
 } from '../api'
 import { formatNumber, useI18n } from '../i18n'
 import { confirm, haptic, openTelegramLink } from '../telegram'
+import type { Route } from '../App'
 import { useLoad } from '../hooks'
 import { ErrorBox, Loading } from '../ui'
 
-export function BotPage({ id, me }: { id: number; me: Me }) {
+export function BotPage({ id, me, navigate }: { id: number; me: Me; navigate: (r: Route) => void }) {
   const { t } = useI18n()
   const bot = useLoad(() => api.bot(id), [id])
 
@@ -40,9 +38,11 @@ export function BotPage({ id, me }: { id: number; me: Me }) {
           </button>
         </div>
       )}
-      <ProfileForm bot={data} me={me} onSaved={bot.set} />
+      <button className="btn secondary block" onClick={() => navigate({ page: 'mine', id: data.id })}>
+        {t('mySettingsForBot')}
+      </button>
+      <ProfileForm bot={data} onSaved={bot.set} />
       <Access bot={data} me={me} onSaved={bot.set} />
-      <OwnKey bot={data} onSaved={bot.set} />
       <Apis bot={data} me={me} onSaved={bot.set} />
       <Chats bot={data} />
       <Usage id={id} />
@@ -117,7 +117,7 @@ function Access({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: Bot
   )
 }
 
-function ProfileForm({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: BotDetail) => void }) {
+function ProfileForm({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail) => void }) {
   const { t } = useI18n()
   const [form, setForm] = useState({
     display_name: bot.display_name,
@@ -126,7 +126,7 @@ function ProfileForm({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b
     language: bot.language,
     tools: bot.tools,
     model_tier: bot.model_tier as 'cheap' | 'strong',
-    cap: bot.daily_credit_cap?.toString() ?? '',
+    recommended_model: bot.recommended_model ?? '',
   })
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | string>('idle')
 
@@ -139,15 +139,14 @@ function ProfileForm({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b
   const save = async () => {
     setStatus('saving')
     try {
-      const cap = form.cap.trim()
       const saved = await api.updateBot(bot.id, {
         display_name: form.display_name,
         description: form.description,
         system_prompt: form.system_prompt,
         language: form.language,
         tools: form.tools,
-        ...(me.model_tiers.includes(form.model_tier) ? { model_tier: form.model_tier } : {}),
-        ...(cap ? { daily_credit_cap: Number(cap) } : { clear_daily_credit_cap: true }),
+        model_tier: form.model_tier,
+        recommended_model: form.recommended_model.trim(),
       })
       onSaved(saved)
       setStatus('saved')
@@ -179,158 +178,33 @@ function ProfileForm({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b
         </label>
       ))}
       <label>{t('model')}</label>
-      {bot.byok ? (
-        <p className="hint">{t('modelByByok', { model: bot.byok.model })}</p>
-      ) : (
-        <select
-          value={form.model_tier}
-          onChange={(e) => setForm({ ...form, model_tier: e.target.value as 'cheap' | 'strong' })}
-        >
-          {(['cheap', 'strong'] as const).map((tier) => (
-            <option key={tier} value={tier} disabled={!me.model_tiers.includes(tier)}>
-              {t(`model.${tier}`)}
-            </option>
-          ))}
-        </select>
-      )}
-      <label>{t('dailyCap')}</label>
-      <input inputMode="numeric" value={form.cap} onChange={(e) => setForm({ ...form, cap: e.target.value.replace(/\D/g, '') })} />
+      <select
+        value={form.model_tier}
+        onChange={(e) => setForm({ ...form, model_tier: e.target.value as 'cheap' | 'strong' })}
+      >
+        {(['cheap', 'strong'] as const).map((tier) => (
+          <option key={tier} value={tier}>
+            {t(`model.${tier}`)}
+          </option>
+        ))}
+      </select>
+      <p className="hint">{t('modelTierHint')}</p>
+      <label>{t('recommendedModel')}</label>
+      <input
+        dir="ltr"
+        value={form.recommended_model}
+        maxLength={128}
+        placeholder="claude-sonnet-5.5"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        onChange={(e) => setForm({ ...form, recommended_model: e.target.value })}
+      />
       <button className="btn block" disabled={status === 'saving'} onClick={save}>
         {status === 'saved' ? t('saved') : t('save')}
       </button>
       {!['idle', 'saving', 'saved'].includes(status) && <p className="error">{status}</p>}
     </div>
-  )
-}
-
-const PROVIDER_NAMES: Record<Provider, string> = {
-  openrouter: 'OpenRouter',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-}
-
-const MODEL_EXAMPLES: Record<Provider, string> = {
-  openrouter: 'anthropic/claude-sonnet-5.5',
-  openai: 'gpt-5-mini',
-  anthropic: 'claude-haiku-4-5',
-}
-
-function OwnKey({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail) => void }) {
-  const { t } = useI18n()
-  const current = bot.byok
-  const [editing, setEditing] = useState(false)
-  const [provider, setProvider] = useState<Provider>(current?.provider ?? 'openrouter')
-  const [model, setModel] = useState(current?.model ?? '')
-  const [apiKey, setApiKey] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // The stored key can be kept when only the model changes.
-  const canKeepKey = current?.provider === provider
-
-  const run = async (action: () => Promise<BotDetail>) => {
-    setBusy(true)
-    setError(null)
-    try {
-      onSaved(await action())
-      setEditing(false)
-      setApiKey('')
-      haptic('success')
-    } catch (e) {
-      const reason = e instanceof ApiError && e.status === 422 ? `byokError.${e.message}` : null
-      setError(reason && t(reason) !== reason ? t(reason) : (e as Error).message)
-      haptic('error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const save = () =>
-    run(() =>
-      api.setByok(bot.id, {
-        provider,
-        model: model.trim(),
-        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
-      }),
-    )
-
-  const remove = () => {
-    setModel('')
-    return run(() => api.deleteByok(bot.id))
-  }
-
-  return (
-    <>
-      <h2>{t('byok')}</h2>
-      <div className="card">
-        <p className="hint">{t('byokHint')}</p>
-        {current && !editing ? (
-          <>
-            <p dir="ltr">
-              {t('byokActive', {
-                provider: PROVIDER_NAMES[current.provider],
-                model: current.model,
-                hint: current.key_hint,
-              })}
-            </p>
-            <div className="row">
-              <button className="btn secondary" disabled={busy} onClick={() => setEditing(true)}>
-                {t('byokChange')}
-              </button>
-              <button className="btn danger" disabled={busy} onClick={remove}>
-                {t('byokRemove')}
-              </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <label>{t('byokProvider')}</label>
-            <select value={provider} onChange={(e) => setProvider(e.target.value as Provider)}>
-              {PROVIDERS.map((p) => (
-                <option key={p} value={p}>
-                  {PROVIDER_NAMES[p]}
-                </option>
-              ))}
-            </select>
-            <label>{t('byokModel')}</label>
-            <input
-              dir="ltr"
-              value={model}
-              maxLength={128}
-              placeholder={MODEL_EXAMPLES[provider]}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              onChange={(e) => setModel(e.target.value)}
-            />
-            <label>{t('byokKey')}</label>
-            <input
-              dir="ltr"
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              maxLength={512}
-              placeholder={canKeepKey ? t('byokKeepKey', { hint: current!.key_hint }) : ''}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            <div className="row">
-              <button
-                className="btn"
-                disabled={busy || !model.trim() || (!apiKey.trim() && !canKeepKey)}
-                onClick={save}
-              >
-                {busy ? t('byokTesting') : t('byokSave')}
-              </button>
-              {current && (
-                <button className="btn secondary" disabled={busy} onClick={() => setEditing(false)}>
-                  {t('cancel')}
-                </button>
-              )}
-            </div>
-          </>
-        )}
-        {error && <p className="error">{error}</p>}
-      </div>
-    </>
   )
 }
 

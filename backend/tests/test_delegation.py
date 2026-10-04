@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from obot.billing.plans import ModelPrice, Pricing
-from obot.bots.byok import set_key
 from obot.bots.service import ManagedBotInfo, register_managed_bot
 from obot.bots.users import join_bot, user_bots
 from obot.config import get_settings
@@ -20,8 +19,10 @@ from obot.core.byok import Provider
 from obot.core.tools import ToolServices, build_tools
 from obot.db.models import BotVisibility, UsageEvent
 from obot.telegram.delegation import Delegator, delegation_note
+from tests.test_byok import use_own_key
 
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
+KEY = "sk-own-key-1234"
 
 
 async def make_bot(session, cipher, tg_bot_id: int, username: str, owner: int = 1001, tools=()):
@@ -83,7 +84,7 @@ async def test_delegate_answers_with_callee_and_bills_it(session, cipher) -> Non
 async def test_whoever_asked_pays_and_never_uses_the_owners_key(session, cipher, redis) -> None:
     caller = await make_bot(session, cipher, 1, "asst_bot")
     callee = await make_bot(session, cipher, 2, "fr_bot")
-    set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
+    await use_own_key(session, cipher, callee.owner, callee, Provider.OPENAI, "gpt-5-mini", KEY)
     callee.visibility = BotVisibility.PUBLIC
     ali, _ = await join_bot(session, callee, 5005, None)
     await session.commit()
@@ -233,7 +234,7 @@ def byok_runtime(session, cipher, redis, own_model):
 async def test_callee_answers_with_its_own_key_for_free(session, cipher, redis) -> None:
     caller = await make_bot(session, cipher, 1, "asst_bot")
     callee = await make_bot(session, cipher, 2, "fr_bot")
-    set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
+    await use_own_key(session, cipher, caller.owner, callee, Provider.OPENAI, "gpt-5-mini", KEY)
     await session.commit()
     runtime, sent = byok_runtime(session, cipher, redis, AnsweringModel("Bonjour (own key)"))
 
@@ -246,19 +247,15 @@ async def test_callee_answers_with_its_own_key_for_free(session, cipher, redis) 
     assert sent == []
 
 
-async def test_failing_own_key_tells_the_owner_once(session, cipher, redis) -> None:
+async def test_failing_own_key_is_reported_to_the_asking_bot(session, cipher, redis) -> None:
     caller = await make_bot(session, cipher, 1, "asst_bot")
     callee = await make_bot(session, cipher, 2, "fr_bot")
-    set_key(cipher, callee, Provider.OPENAI, "gpt-5-mini", "sk-own-key-1234")
+    await use_own_key(session, cipher, caller.owner, callee, Provider.OPENAI, "gpt-5-mini", KEY)
     await session.commit()
     runtime, sent = byok_runtime(session, cipher, redis, FailingModel())
     delegate = Delegator(runtime, caller, caller.owner)
 
-    first = await delegate("fr_bot", "hello?")
-    await delegate("fr_bot", "hello again?")
+    answer = await delegate("fr_bot", "hello?")
 
-    assert first.startswith("ERROR")
-    assert len(sent) == 1
-    owner_chat, text = sent[0]
-    assert owner_chat == 1001
-    assert "@fr_bot" in text and "OpenAI" in text and "invalid" in text
+    assert answer.startswith("ERROR") and "own key" in answer and "auth" in answer
+    assert sent == []
