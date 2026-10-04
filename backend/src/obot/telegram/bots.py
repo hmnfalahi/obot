@@ -41,6 +41,7 @@ from obot.telegram.conversations import (
     is_skip,
     peers_note,
 )
+from obot.telegram.delegation import DELEGATION_TOOL, Delegator, delegation_note, owner_peers
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.reply_rules import pick_rule, welcome_rule
 from obot.telegram.runtime import Runtime
@@ -310,6 +311,10 @@ async def _respond(
             meter=UsageMeter(session, runtime.pricing, owner, bot_record, now),
             tavily_api_key=runtime.tavily_api_key,
         )
+        if DELEGATION_TOOL in (bot_record.tools or []):
+            services.delegate = Delegator(runtime, bot_record)
+            peers_to_ask = delegation_note(await owner_peers(session, bot_record))
+            note = "\n\n".join(n for n in (note, peers_to_ask) if n) or None
         reply = await generate_reply(
             runtime.models.for_tier(tier),
             profile,

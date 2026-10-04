@@ -19,6 +19,7 @@ from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL
 from obot.notices import first_today
 from obot.tasks.service import claim_due, record_run
+from obot.telegram.delegation import DELEGATION_TOOL, Delegator, delegation_note, owner_peers
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -117,18 +118,24 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
                     session, runtime.pricing, bot_record, scope, task.instruction, runtime.embedder
                 )
             tier = allowed_tier(runtime.pricing, owner, bot_record.model_tier)
+            services = ToolServices(
+                http=runtime.http,
+                meter=UsageMeter(session, runtime.pricing, owner, bot_record, started),
+                tavily_api_key=runtime.tavily_api_key,
+            )
+            note = None
+            if DELEGATION_TOOL in (bot_record.tools or []):
+                services.delegate = Delegator(runtime, bot_record)
+                note = delegation_note(await owner_peers(session, bot_record))
             reply = await generate_reply(
                 runtime.models.for_tier(tier),
                 BotProfile(name=bot_record.display_name, persona=bot_record.persona),
                 [],
                 prompt,
                 tools=build_tools(bot_record.tools or []),
-                services=ToolServices(
-                    http=runtime.http,
-                    meter=UsageMeter(session, runtime.pricing, owner, bot_record, started),
-                    tavily_api_key=runtime.tavily_api_key,
-                ),
+                services=services,
                 memories=memories,
+                note=note,
             )
             await record_llm_usage(
                 session,

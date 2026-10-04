@@ -25,6 +25,7 @@ class ToolName(enum.StrEnum):
     READ_URL = "read_url"
     RSS = "rss"
     MEMORY = "memory"
+    ASK_BOTS = "ask_bots"
 
 
 TOOL_DESCRIPTIONS = {
@@ -32,6 +33,7 @@ TOOL_DESCRIPTIONS = {
     ToolName.READ_URL: "read the content of a given web page (e.g. a price from a site)",
     ToolName.RSS: "read RSS/Atom feeds",
     ToolName.MEMORY: "remember facts about the chat over time",
+    ToolName.ASK_BOTS: "consult the user's other bots (e.g. a translator) behind the scenes",
 }
 
 

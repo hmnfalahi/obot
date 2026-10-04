@@ -75,6 +75,7 @@ const en = {
   'tool.read_url': 'Read web pages',
   'tool.rss': 'RSS feeds',
   'tool.memory': 'Long-term memory',
+  'tool.ask_bots': 'Ask my other bots',
 }
 
 type Key = keyof typeof en
@@ -153,6 +154,7 @@ const fa: Record<Key, string> = {
   'tool.read_url': 'خواندن صفحه‌ی وب',
   'tool.rss': 'خبرخوان RSS',
   'tool.memory': 'حافظه‌ی بلندمدت',
+  'tool.ask_bots': 'کمک گرفتن از ربات‌های دیگرم',
 }
 
 const catalogs: Record<Lang, Record<Key, string>> = { en, fa }
