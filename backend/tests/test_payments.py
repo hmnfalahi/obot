@@ -126,3 +126,30 @@ async def test_invoice_link_for_package(api, monkeypatch) -> None:
     assert created["prices"][0].amount == 250
     assert created["payload"] == "credits:s250"
     assert missing.status_code == 404
+
+
+async def test_manual_grant_credits_once_and_records_admin(session) -> None:
+    from obot.billing.payments import grant_credits
+
+    user = await get_or_create_user(session, 1001)
+
+    assert await grant_credits(session, user, 5000, admin_tg_id=9, grant_id="1001-77", note="r")
+    # A double-tapped grant button carries the same receipt id.
+    assert not await grant_credits(session, user, 5000, admin_tg_id=9, grant_id="1001-77")
+
+    assert user.credit_balance == 5000 and user.plan == PAID_PLAN
+    [payment] = list(await session.scalars(select(Payment)))
+    assert (payment.method, payment.granted_by, payment.stars) == ("manual", 9, 0)
+    assert payment.telegram_charge_id == "manual-1001-77"
+
+
+async def test_stars_and_manual_payments_are_told_apart(session, pricing) -> None:
+    from obot.billing.payments import grant_credits
+
+    user = await get_or_create_user(session, 1001)
+    await record_purchase(session, user, pricing.package("s50"), "tg-charge")
+    await grant_credits(session, user, 100, admin_tg_id=9, grant_id="x")
+
+    methods = sorted(p.method for p in await session.scalars(select(Payment)))
+    assert methods == ["manual", "stars"]
+    assert user.credit_balance == 6600

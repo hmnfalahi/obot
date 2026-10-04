@@ -53,6 +53,8 @@ class Runtime:
     # Public HTTPS origin for webhook URLs given to owners (None: webhooks unavailable)
     public_url: str | None = None
     admins: frozenset[int] = frozenset()
+    # Card-to-card instructions; None disables manual top-ups
+    manual_payment_text: str | None = None
     # Abuse reports one person may send per day
     daily_reports: int = 5
 

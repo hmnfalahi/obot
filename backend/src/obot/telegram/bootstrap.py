@@ -124,6 +124,7 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
         miniapp_url=settings.miniapp_url,
         public_url=settings.public_base_url or settings.miniapp_url,
         admins=settings.admins,
+        manual_payment_text=settings.manual_payment_text,
         tavily_api_key=(
             settings.tavily_api_key.get_secret_value() if settings.tavily_api_key else None
         ),

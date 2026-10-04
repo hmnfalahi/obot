@@ -376,16 +376,22 @@ class Report(Base):
 
 
 class Payment(Base):
-    """A credit purchase paid with Telegram Stars."""
+    """Credits bought with Telegram Stars or granted by an admin after a manual payment."""
 
     __tablename__ = "payments"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # "stars" or "manual" (card-to-card, granted by an admin)
+    method: Mapped[str] = mapped_column(String(16), default="stars", server_default="stars")
+    # Admin who granted a manual payment, and their note (e.g. the receipt reference).
+    granted_by: Mapped[int | None] = mapped_column(BigInteger)
+    note: Mapped[str | None] = mapped_column(Text)
     package_id: Mapped[str] = mapped_column(String(32))
     stars: Mapped[int]
     credits: Mapped[int] = mapped_column(BigInteger)
-    # Telegram's id of the charge; unique so a redelivered update cannot credit twice.
+    # Telegram's id of the charge (or "manual-<uuid>"); unique so a redelivered update
+    # or a double-tapped grant button cannot credit twice.
     telegram_charge_id: Mapped[str] = mapped_column(String(128), unique=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     refunded_at: Mapped[datetime | None]

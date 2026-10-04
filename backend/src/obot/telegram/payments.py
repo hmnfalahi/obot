@@ -1,6 +1,7 @@
 """Credit purchases with Telegram Stars in the factory bot."""
 
 import logging
+import uuid
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -19,6 +20,7 @@ from obot.billing.payments import (
     STARS_CURRENCY,
     PaymentError,
     find_payment,
+    grant_credits,
     invoice_payload,
     package_for_payload,
     record_purchase,
@@ -69,6 +71,134 @@ async def on_buy(message: Message, session: AsyncSession, runtime: Runtime) -> N
     await message.answer(
         t(lang, "buy.menu", balance=f"{user.credit_balance:,}"),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    if runtime.manual_payment_text:
+        await message.answer(t(lang, "buy.manual", text=runtime.manual_payment_text))
+
+
+# --- manual top-ups (card-to-card, SPEC 8.6 P3-1) ----------------------------------------------
+
+
+@router.message(F.photo, F.chat.type == ChatType.PRIVATE)
+async def on_receipt(message: Message, session: AsyncSession, runtime: Runtime) -> None:
+    """A payment receipt: forward it to the admins with a button per package."""
+    if not runtime.manual_payment_text or not runtime.admins:
+        return
+    user = await get_or_create_user(session, message.from_user.id, message.from_user.language_code)
+    grant_id = f"{user.tg_user_id}-{message.message_id}"
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text=f"✅ {p.credits:,} credits ({p.id})",
+                callback_data=f"grant:{user.tg_user_id}:{p.id}:{message.message_id}",
+            )
+        ]
+        for p in runtime.pricing.star_packages
+    ]
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="✖️ Reject", callback_data=f"grantno:{user.tg_user_id}:{message.message_id}"
+            )
+        ]
+    )
+    caption = (
+        f"🧾 Receipt from {message.from_user.full_name} ({user.tg_user_id}"
+        f"{', @' + message.from_user.username if message.from_user.username else ''})\n"
+        f"Plan {user.plan}, balance {user.credit_balance:,}. Grant id {grant_id}\n"
+        f"{message.caption or ''}"
+    )
+    for admin in runtime.admins:
+        try:
+            await runtime.factory_bot.send_photo(
+                admin,
+                message.photo[-1].file_id,
+                caption=caption[:1000],
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+        except Exception:
+            log.warning("could not forward receipt to admin %s", admin, exc_info=True)
+    await message.answer(t(lang_of(message.from_user.language_code), "receipt.received"))
+
+
+async def _notify(runtime: Runtime, user: User, key: str, **kwargs: object) -> None:
+    try:
+        await runtime.factory_bot.send_message(
+            user.tg_user_id, t(lang_of(user.language), key, **kwargs)
+        )
+    except Exception:
+        log.warning("could not notify user %s", user.id, exc_info=True)
+
+
+@router.callback_query(F.data.startswith("grant:"), IsAdmin())
+async def on_grant_button(query: CallbackQuery, session: AsyncSession, runtime: Runtime) -> None:
+    _, tg_user_id, package_id, receipt_id = query.data.split(":")
+    package = runtime.pricing.package(package_id)
+    user = await get_or_create_user(session, int(tg_user_id))
+    if package is None:
+        await query.answer("Unknown package")
+        return
+    granted = await grant_credits(
+        session,
+        user,
+        package.credits,
+        query.from_user.id,
+        grant_id=f"{tg_user_id}-{receipt_id}",
+        package_id=package.id,
+        note="receipt",
+    )
+    await query.answer("Granted" if granted else "Already granted")
+    await query.message.edit_reply_markup(reply_markup=None)
+    if granted:
+        await session.commit()
+        await _notify(
+            runtime,
+            user,
+            "receipt.granted",
+            credits=f"{package.credits:,}",
+            balance=f"{user.credit_balance:,}",
+        )
+        log.info("admin %s granted %s to user %s", query.from_user.id, package.id, user.id)
+
+
+@router.callback_query(F.data.startswith("grantno:"), IsAdmin())
+async def on_reject_receipt(query: CallbackQuery, session: AsyncSession, runtime: Runtime) -> None:
+    _, tg_user_id, _receipt_id = query.data.split(":")
+    user = await get_or_create_user(session, int(tg_user_id))
+    await query.answer("Rejected")
+    await query.message.edit_reply_markup(reply_markup=None)
+    await _notify(runtime, user, "receipt.rejected")
+
+
+@router.message(Command("grant"), IsAdmin(), F.chat.type == ChatType.PRIVATE)
+async def on_grant(
+    message: Message, command: CommandObject, session: AsyncSession, runtime: Runtime
+) -> None:
+    """/grant <telegram user id> <credits> [note]"""
+    parts = (command.args or "").split(maxsplit=2)
+    try:
+        tg_user_id, credits = int(parts[0]), int(parts[1])
+    except (IndexError, ValueError):
+        await message.answer("Usage: /grant <telegram user id> <credits> [note]")
+        return
+    if credits <= 0:
+        await message.answer("Credits must be positive.")
+        return
+    user = await get_or_create_user(session, tg_user_id)
+    await grant_credits(
+        session,
+        user,
+        credits,
+        message.from_user.id,
+        grant_id=uuid.uuid4().hex,
+        note=parts[2] if len(parts) > 2 else None,
+    )
+    await session.commit()
+    await message.answer(
+        f"Granted {credits:,} credits to {tg_user_id}; balance {user.credit_balance:,}."
+    )
+    await _notify(
+        runtime, user, "receipt.granted", credits=f"{credits:,}", balance=f"{user.credit_balance:,}"
     )
 
 
