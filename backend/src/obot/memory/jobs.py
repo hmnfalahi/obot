@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 
 from pydantic_ai.models import Model
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import joinedload
 
@@ -11,7 +12,7 @@ from obot.billing.plans import Pricing
 from obot.billing.usage import QuotaReason, check_llm_quota, record_llm_usage
 from obot.chat.history import ChatScope
 from obot.core.memory import Embedder, KnownFact, extract_facts
-from obot.db.models import Bot, SenderKind, UsageKind
+from obot.db.models import Bot, SenderKind, UsageKind, User
 from obot.memory.store import (
     add_facts,
     count_facts,
@@ -32,7 +33,7 @@ MAX_KNOWN_FACTS = 100
 # Up to this many facts are given to the model in full; beyond it, vector search.
 FULL_RECALL_LIMIT = 20
 SEARCH_RECALL_LIMIT = 5
-# Extraction is background work: it stops when the owner cannot pay, not when the
+# Extraction is background work: it stops when the payer cannot pay, not when the
 # daily message count is used up.
 BLOCKING_REASONS = {QuotaReason.BOT_DAILY_CAP, QuotaReason.NO_CREDITS}
 
@@ -61,9 +62,11 @@ async def extract_scope(
 ) -> None:
     async with sessionmaker() as session:
         bot = await session.get(Bot, scope.bot_id, options=[joinedload(Bot.owner)])
-        quota = await check_llm_quota(session, pricing, bot.owner, bot, datetime.now(UTC))
-        if quota.reason in BLOCKING_REASONS:
-            return
+        payer = await memory_payer(session, scope)
+        if payer is not None:
+            quota = await check_llm_quota(session, pricing, payer, bot, datetime.now(UTC))
+            if quota.reason in BLOCKING_REASONS:
+                return
 
         messages = await messages_after(
             session, scope, await get_cursor(session, scope), EXTRACT_BATCH
@@ -80,7 +83,7 @@ async def extract_scope(
         await record_llm_usage(
             session,
             pricing,
-            bot.owner,
+            payer,
             bot,
             result.model_name,
             result.input_tokens,
@@ -93,7 +96,7 @@ async def extract_scope(
             await record_llm_usage(
                 session,
                 pricing,
-                bot.owner,
+                payer,
                 bot,
                 embeddings.model_name,
                 embeddings.tokens,
@@ -114,10 +117,18 @@ async def extract_scope(
     )
 
 
+async def memory_payer(session: AsyncSession, scope: ChatScope) -> User | None:
+    """Who pays for remembering a chat: the person in a private chat, Obot in a group."""
+    if scope.tg_chat_id < 0:
+        return None
+    return await session.scalar(select(User).where(User.tg_user_id == scope.tg_chat_id))
+
+
 async def recall_facts(
     session: AsyncSession,
     pricing: Pricing,
     bot: Bot,
+    payer: User,
     scope: ChatScope,
     query: str,
     embedder: Embedder,
@@ -129,7 +140,7 @@ async def recall_facts(
     await record_llm_usage(
         session,
         pricing,
-        bot.owner,
+        payer,
         bot,
         embeddings.model_name,
         embeddings.tokens,

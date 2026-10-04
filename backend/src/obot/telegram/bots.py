@@ -11,16 +11,16 @@ from aiogram.types import ChatMemberUpdated, InlineKeyboardButton, InlineKeyboar
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import QuotaReason, check_llm_quota, record_llm_usage
-from obot.bots.byok import reply_model, uses_byok
+from obot.bots.byok import pays_with_key, reply_model
 from obot.bots.service import mark_owner_started
-from obot.bots.users import has_started, join_bot, leave_bot
+from obot.bots.users import join_bot, leave_bot, started_user
 from obot.chat.history import ChatScope, recent_messages, record_message
 from obot.chat.membership import upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
 from obot.core.byok import failure_of
 from obot.db.models import Bot as BotRecord
 from obot.db.models import Message as StoredMessage
-from obot.db.models import SenderKind
+from obot.db.models import SenderKind, User
 from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL, forget_chat
@@ -123,12 +123,16 @@ async def on_private_text(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
     # Any private message starts using the bot, not only /start.
-    await join_bot(session, bot_record, message.from_user.id, message.from_user.language_code)
+    user, _ = await join_bot(
+        session, bot_record, message.from_user.id, message.from_user.language_code
+    )
     if await mark_owner_started(session, bot_record, message.from_user.id):
         await resume_waiting(session, bot_record, datetime.now(UTC))
     scope = ChatScope(bot_id=bot_record.id, tg_chat_id=message.chat.id)
     incoming = await _record_incoming(session, scope, message)
-    await _respond(Inbound.of(message), message.text, incoming, scope, session, bot_record, runtime)
+    await _respond(
+        Inbound.of(message), message.text, incoming, scope, session, bot_record, user, runtime
+    )
 
 
 @router.message(F.text, F.chat.type.in_(GROUP_TYPES))
@@ -142,11 +146,12 @@ async def on_group_text(
     incoming = await _record_incoming(session, scope, message)
     if not is_addressed(message, message.bot.id, bot_record.username):
         return
-    if not await has_started(session, bot_record, message.from_user.id):
+    user = await started_user(session, bot_record, message.from_user.id)
+    if user is None:
         await ask_to_start(message, bot_record, runtime)
         return
     text = strip_mention(message.text, bot_record.username) or message.text
-    await _respond(Inbound.of(message), text, incoming, scope, session, bot_record, runtime)
+    await _respond(Inbound.of(message), text, incoming, scope, session, bot_record, user, runtime)
 
 
 async def ask_to_start(message: Message, bot_record: BotRecord, runtime: Runtime) -> None:
@@ -225,15 +230,18 @@ async def _respond(
     scope: ChatScope,
     session: AsyncSession,
     bot_record: BotRecord,
+    payer: User,
     runtime: Runtime,
 ) -> None:
-    owner = bot_record.owner
+    """Answer `payer`'s message; they pay for it (SPEC 8.7)."""
+    if payer.is_disabled:  # suspended by an admin: no bot serves them
+        return
     group = inbound.group
     now = datetime.now(UTC)
-    byok = uses_byok(bot_record)
-    quota = await check_llm_quota(session, runtime.pricing, owner, bot_record, now, byok=byok)
+    byok = pays_with_key(bot_record, payer)
+    quota = await check_llm_quota(session, runtime.pricing, payer, bot_record, now, byok=byok)
     if not quota.allowed:
-        await notify_quota_exhausted(inbound, bot_record, quota.reason, runtime, now)
+        await notify_quota_exhausted(inbound, bot_record, payer, quota.reason, runtime, now)
         return
 
     history = [
@@ -249,10 +257,10 @@ async def _respond(
     try:
         if MEMORY_TOOL in (bot_record.tools or []):
             memories = await recall_facts(
-                session, runtime.pricing, bot_record, scope, text, runtime.embedder
+                session, runtime.pricing, bot_record, payer, scope, text, runtime.embedder
             )
-        chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record)
-        kit = await toolkit(session, runtime, bot_record, now)
+        chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record, payer)
+        kit = await toolkit(session, runtime, bot_record, now, payer)
         reply = await generate_reply(
             chosen.model,
             profile,
@@ -284,7 +292,7 @@ async def _respond(
     usage = await record_llm_usage(
         session,
         runtime.pricing,
-        owner,
+        payer,
         bot_record,
         reply.model_name,
         reply.input_tokens,
@@ -317,34 +325,27 @@ async def _respond(
 async def notify_quota_exhausted(
     inbound: Inbound,
     bot_record: BotRecord,
+    payer: User,
     reason: QuotaReason,
     runtime: Runtime,
     now: datetime,
 ) -> None:
-    """Tell the chat (once per day) and the owner (once per day per reason)."""
-    owner = bot_record.owner
-    chat_key = f"quota:{bot_record.id}:{inbound.chat_id}"
-    if await first_today(runtime.redis, chat_key, now, owner.timezone):
-        await runtime.sender.send_text(
-            inbound.client,
-            inbound.chat_id,
-            t(lang_of(inbound.sender_language), f"quota.{reason}"),
-            group=inbound.group,
-            reply_to=inbound.message_id if inbound.group else None,
+    """Tell the person their own quota is used up, with a way to top up; once a day."""
+    key = f"quota:{bot_record.id}:{inbound.chat_id}:{payer.id}:{reason}"
+    if not await first_today(runtime.redis, key, now, payer.timezone):
+        return
+    lang = lang_of(inbound.sender_language)
+    buttons = None
+    if reason != QuotaReason.BOT_DAILY_CAP:
+        top_up = InlineKeyboardButton(
+            text=t(lang, "btn.top_up"), url=f"https://t.me/{runtime.factory_username}?start=buy"
         )
-
-    owner_key = f"quota-owner:{owner.id}:{reason}"
-    if reason == QuotaReason.BOT_DAILY_CAP:
-        owner_key += f":{bot_record.id}"
-    if await first_today(runtime.redis, owner_key, now, owner.timezone):
-        limit = runtime.pricing.plan(owner.plan).daily_llm_messages
-        text = t(
-            lang_of(owner.language),
-            f"owner.quota.{reason}",
-            limit=limit,
-            username=bot_record.username,
-        )
-        try:
-            await runtime.factory_bot.send_message(owner.tg_user_id, text)
-        except Exception:
-            log.warning("could not notify owner %s about quota", owner.id, exc_info=True)
+        buttons = InlineKeyboardMarkup(inline_keyboard=[[top_up]])
+    await runtime.sender.send_text(
+        inbound.client,
+        inbound.chat_id,
+        t(lang, f"quota.{reason}"),
+        group=inbound.group,
+        reply_to=inbound.message_id if inbound.group else None,
+        buttons=buttons,
+    )

@@ -140,6 +140,7 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
 
     me = await get_me_with_retry(factory_bot)
     log.info("factory bot @%s, %s mode", me.username, mode)
+    runtime.factory_username = me.username
 
     updates = UpdateQueue()
     runtime.updates = updates

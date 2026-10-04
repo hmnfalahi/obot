@@ -9,13 +9,13 @@ from aiogram import Bot
 from sqlalchemy.orm import joinedload
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
-from obot.bots.byok import reply_model, uses_byok
+from obot.bots.byok import pays_with_key, reply_model
 from obot.chat.history import ChatScope, record_message
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
 from obot.core.fetch import truncate
 from obot.db.models import Bot as BotRecord
-from obot.db.models import BotStatus, SenderKind, Task
+from obot.db.models import BotStatus, SenderKind, Task, User
 from obot.i18n import lang_of, t
 from obot.memory.jobs import recall_facts
 from obot.memory.store import MEMORY_TOOL
@@ -98,21 +98,22 @@ async def _run_step(
     session,
     runtime: Runtime,
     bot_record: BotRecord,
+    payer: User,
     own: bool,
     prompt: str,
     started: datetime,
     scope: ChatScope,
     recall_query: str,
 ) -> str:
-    """One model run of a task by `bot_record`, billed to it; `own`: the task's own bot."""
+    """One model run of a task by `bot_record`, billed to `payer`; `own`: the task's own bot."""
     memories = []
     if own and MEMORY_TOOL in (bot_record.tools or []):
         memories = await recall_facts(
-            session, runtime.pricing, bot_record, scope, recall_query, runtime.embedder
+            session, runtime.pricing, bot_record, payer, scope, recall_query, runtime.embedder
         )
-    chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record)
+    chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, bot_record, payer)
     # Another bot doing a step works like ask_bot: it cannot delegate further.
-    kit = await toolkit(session, runtime, bot_record, started, delegation=own)
+    kit = await toolkit(session, runtime, bot_record, started, payer, delegation=own)
     reply = await generate_reply(
         chosen.model,
         BotProfile(name=bot_record.display_name, persona=bot_record.persona),
@@ -126,7 +127,7 @@ async def _run_step(
     await record_llm_usage(
         session,
         runtime.pricing,
-        bot_record.owner,
+        payer,
         bot_record,
         reply.model_name,
         reply.input_tokens,
@@ -152,16 +153,17 @@ async def _run_chain(
     started: datetime,
     scope: ChatScope,
 ) -> str:
-    """Run every step in order; the last step's output."""
+    """Run every step in order; the last step's output. The task's owner pays."""
+    payer = bot_record.owner
     language = (bot_record.persona or {}).get("language")
     output: str | None = None
     for index, step in enumerate(task.steps):
         step_bot = await _step_bot(session, bot_record, step.get("bot_id"), index)
-        byok = uses_byok(step_bot)
+        byok = pays_with_key(step_bot, payer)
         if index > 0 or step_bot is not bot_record:
             # execute_task checked the task's own bot before its first step.
             quota = await check_llm_quota(
-                session, runtime.pricing, step_bot.owner, step_bot, started, byok=byok
+                session, runtime.pricing, payer, step_bot, started, byok=byok
             )
             if not quota.allowed:
                 raise StepFailed(index, step_bot.username, f"quota: {quota.reason}")
@@ -171,6 +173,7 @@ async def _run_chain(
                 session,
                 runtime,
                 step_bot,
+                payer,
                 step_bot is bot_record,
                 prompt,
                 started,
@@ -225,7 +228,7 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
             )
             return
 
-        byok = uses_byok(bot_record)
+        byok = pays_with_key(bot_record, owner)
         quota = await check_llm_quota(
             session, runtime.pricing, owner, bot_record, started, byok=byok
         )
@@ -255,7 +258,15 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
                 prompt = task_prompt(task, (bot_record.persona or {}).get("language"))
                 try:
                     text = await _run_step(
-                        session, runtime, bot_record, True, prompt, started, scope, task.instruction
+                        session,
+                        runtime,
+                        bot_record,
+                        owner,
+                        True,
+                        prompt,
+                        started,
+                        scope,
+                        task.instruction,
                     )
                 except Exception as e:
                     raise _step_failed(e, 0, bot_record, byok, numbered=False) from e

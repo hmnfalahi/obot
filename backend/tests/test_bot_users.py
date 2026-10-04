@@ -126,3 +126,62 @@ async def test_people_who_never_started_are_asked_once_a_day(
     assert group.notices == ["برای استفاده از من، اول توی پیوی استارتم کن."]
     buttons = group.runtime.sender.send_text.await_args.kwargs["buttons"]
     assert buttons.inline_keyboard[0][0].url == f"https://t.me/{USERNAME}?start=g"
+
+
+async def test_quota_notice_goes_to_the_payer_once_a_day(session, cipher, redis) -> None:
+    from obot.billing.usage import QuotaReason
+
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, "fa")
+    runtime = SimpleNamespace(redis=redis, sender=AsyncMock(), factory_username="obot_factory_bot")
+    inbound = bots_module.Inbound(
+        client=AsyncMock(id=BOT_ID),
+        chat_id=GROUP.id,
+        message_id=10,
+        sender_name="Ali",
+        sender_language="fa",
+        group=True,
+    )
+
+    for _ in range(2):
+        await bots_module.notify_quota_exhausted(
+            inbound, record, ali, QuotaReason.DAILY_MESSAGES, runtime, datetime.now(UTC)
+        )
+
+    call = runtime.sender.send_text.await_args
+    assert runtime.sender.send_text.await_count == 1
+    assert "پیام‌های رایگان امروزت" in call.args[2] and call.kwargs["reply_to"] == 10
+    button = call.kwargs["buttons"].inline_keyboard[0][0]
+    assert button.url == "https://t.me/obot_factory_bot?start=buy"
+
+
+async def test_memory_is_paid_by_the_person_in_private_and_by_obot_in_groups(
+    session, cipher
+) -> None:
+    from obot.chat.history import ChatScope
+    from obot.memory.jobs import memory_payer
+
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, None)
+
+    assert (await memory_payer(session, ChatScope(record.id, ALI.id))).id == ali.id
+    assert await memory_payer(session, ChatScope(record.id, GROUP.id)) is None
+
+
+async def test_suspended_people_are_not_served(session, cipher) -> None:
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, None)
+    ali.is_disabled = True
+    runtime = SimpleNamespace(pricing=None, sender=AsyncMock())
+    inbound = bots_module.Inbound(
+        client=AsyncMock(),
+        chat_id=ALI.id,
+        message_id=1,
+        sender_name="Ali",
+        sender_language=None,
+        group=False,
+    )
+
+    await bots_module._respond(inbound, "hi", None, None, session, record, ali, runtime)
+
+    runtime.sender.send_text.assert_not_awaited()

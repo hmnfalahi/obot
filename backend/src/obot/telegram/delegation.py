@@ -1,8 +1,9 @@
 """Delegation between bots of the same owner (SPEC 8.5, P2-4).
 
 A bot with the ask_bots tool can put a question to one of its owner's other
-bots. The other bot answers with its own persona, tools and billing, in its own
-session, and cannot delegate further (depth 1).
+bots. The other bot answers with its own persona and tools, in its own session,
+and cannot delegate further (depth 1). Whoever started the request pays for the
+answer too.
 """
 
 import logging
@@ -13,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
-from obot.bots.byok import reply_model, uses_byok
+from obot.bots.byok import pays_with_key, reply_model
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
 from obot.core.tools import truncate
-from obot.db.models import Bot, BotStatus
+from obot.db.models import Bot, BotStatus, User
 from obot.telegram.byok_notice import notify_key_failure
 from obot.telegram.runtime import Runtime
 
@@ -55,8 +56,9 @@ def delegation_note(peers: list[Bot]) -> str | None:
 class Delegator:
     """The `delegate` callable for ToolServices of one reply."""
 
-    def __init__(self, runtime: Runtime, caller: Bot) -> None:
+    def __init__(self, runtime: Runtime, caller: Bot, payer: User) -> None:
         self._runtime = runtime
+        self._payer_id = payer.id
         self._caller_id = caller.id
         self._caller_name = caller.display_name
         self._owner_id = caller.owner_id
@@ -76,10 +78,9 @@ class Delegator:
             )
             if callee is None or callee.status != BotStatus.ACTIVE:
                 return f"ERROR: there is no active bot @{username} you can ask."
-            byok = uses_byok(callee)
-            quota = await check_llm_quota(
-                session, runtime.pricing, callee.owner, callee, now, byok=byok
-            )
+            payer = await session.get(User, self._payer_id)
+            byok = pays_with_key(callee, payer)
+            quota = await check_llm_quota(session, runtime.pricing, payer, callee, now, byok=byok)
             if not quota.allowed:
                 return f"ERROR: @{username} cannot answer right now (usage limit reached)."
 
@@ -92,6 +93,7 @@ class Delegator:
                 runtime,
                 callee,
                 now,
+                payer,
                 delegation=False,
                 note=(
                     f"This question comes from {self._caller_name}, another bot of your "
@@ -99,7 +101,7 @@ class Delegator:
                 ),
             )
             try:
-                chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, callee)
+                chosen = reply_model(runtime.models, runtime.cipher, runtime.pricing, callee, payer)
                 reply = await generate_reply(
                     chosen.model,
                     BotProfile(name=callee.display_name, persona=callee.persona),
@@ -118,7 +120,7 @@ class Delegator:
             await record_llm_usage(
                 session,
                 runtime.pricing,
-                callee.owner,
+                payer,
                 callee,
                 reply.model_name,
                 reply.input_tokens,

@@ -16,7 +16,8 @@ from sqlalchemy.orm import joinedload
 from obot.billing.plans import Pricing
 from obot.billing.usage import QuotaReason, check_llm_quota, count_messages, record_llm_usage
 from obot.bots.byok import clear_key, key_hint, read_key, reply_model, set_key, uses_byok
-from obot.bots.service import ManagedBotInfo, register_managed_bot
+from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
+from obot.bots.users import bot_settings
 from obot.core.byok import Byok, Failure, KeyCheckFailed, Provider, failure_of
 from obot.db.models import Bot, UsageEvent
 from tests.test_api import ALICE, BOB, auth
@@ -95,14 +96,27 @@ async def test_reply_model_prefers_the_bots_own_key(session, cipher, pricing) ->
 
     models = SimpleNamespace(for_tier=lambda tier: tier_model, byok=SimpleNamespace(model=build))
 
-    assert reply_model(models, cipher, pricing, bot).byok is False
-    assert reply_model(models, cipher, pricing, bot).model is tier_model
+    owner = bot.owner
+    assert reply_model(models, cipher, pricing, bot, owner).byok is False
+    assert reply_model(models, cipher, pricing, bot, owner).model is tier_model
 
     set_key(cipher, bot, Provider.ANTHROPIC, "claude-haiku-4-5", KEY)
-    chosen = reply_model(models, cipher, pricing, bot)
+    chosen = reply_model(models, cipher, pricing, bot, owner)
 
     assert chosen.byok is True and chosen.model == "byok-model"
     assert built == [(Provider.ANTHROPIC, "claude-haiku-4-5", KEY)]
+
+
+async def test_owner_key_is_never_used_for_others(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    set_key(cipher, bot, Provider.ANTHROPIC, "claude-haiku-4-5", KEY)
+    ali = await get_or_create_user(session, 5005)
+    tier_model = TestModel()
+    models = SimpleNamespace(for_tier=lambda tier: tier_model, byok=None)
+
+    chosen = reply_model(models, cipher, pricing, bot, ali)
+
+    assert chosen.byok is False and chosen.model is tier_model
 
 
 def test_models_are_built_for_each_provider() -> None:
@@ -220,7 +234,7 @@ async def test_byok_ignores_message_limit_and_balance_but_not_the_bot_cap(
     )
     assert (await check_llm_quota(session, pricing, owner, bot, now, byok=True)).allowed
 
-    bot.daily_credit_cap = 1
+    (await bot_settings(session, owner, bot)).daily_credit_cap = 1
     decision = await check_llm_quota(session, pricing, owner, bot, now, byok=True)
     assert decision.reason == QuotaReason.BOT_DAILY_CAP
 

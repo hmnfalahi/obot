@@ -9,11 +9,16 @@ from obot.billing.usage import allowed_tier
 from obot.core.byok import Provider
 from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
-from obot.db.models import Bot
+from obot.db.models import Bot, User
 
 
 def uses_byok(bot: Bot) -> bool:
     return bot.byok_key_encrypted is not None
+
+
+def pays_with_key(bot: Bot, payer: User) -> bool:
+    """The bot's key is its owner's: only their own requests use it (SPEC 8.7)."""
+    return uses_byok(bot) and payer.id == bot.owner_id
 
 
 def _context(bot: Bot) -> str:
@@ -46,15 +51,13 @@ class ReplyModel:
 
 
 def reply_model(
-    models: ModelRegistry, cipher: TokenCipher, pricing: Pricing, bot: Bot
+    models: ModelRegistry, cipher: TokenCipher, pricing: Pricing, bot: Bot, payer: User
 ) -> ReplyModel:
-    """The model for the bot's replies: its own key if set, else its plan's tier.
-
-    `bot.owner` must be loaded.
-    """
-    if uses_byok(bot):
+    """The model for the bot's replies to `payer`: the owner's key for the owner, else the
+    best tier the payer's plan allows."""
+    if pays_with_key(bot, payer):
         key = read_key(cipher, bot)
         model = models.byok.model(Provider(bot.byok_provider), bot.byok_model, key)
         return ReplyModel(model, byok=True)
-    tier = allowed_tier(pricing, bot.owner, bot.model_tier)
+    tier = allowed_tier(pricing, payer, bot.model_tier)
     return ReplyModel(models.for_tier(tier), byok=False)

@@ -10,7 +10,7 @@ from obot.billing.usage import UsageMeter
 from obot.bots.apis import load_endpoints
 from obot.core.custom_api import endpoints_note
 from obot.core.tools import ToolServices, build_tools
-from obot.db.models import Bot
+from obot.db.models import Bot, User
 from obot.telegram.delegation import DELEGATION_TOOL, Delegator, delegation_note, owner_peers
 from obot.telegram.runtime import Runtime
 
@@ -31,11 +31,12 @@ async def toolkit(
     runtime: Runtime,
     bot: Bot,
     now: datetime,
+    payer: User,
     *,
     delegation: bool = True,
     note: str | None = None,
 ) -> Toolkit:
-    """The bot's tools, metered against its owner. `bot.owner` must be loaded.
+    """The bot's tools, metered against `payer` (whoever started the request).
 
     `delegation` False drops ask_bots (a bot answering for another must not delegate).
     """
@@ -43,13 +44,13 @@ async def toolkit(
     apis = await load_endpoints(session, runtime.cipher, bot)
     services = ToolServices(
         http=runtime.http,
-        meter=UsageMeter(session, runtime.pricing, bot.owner, bot, now),
+        meter=UsageMeter(session, runtime.pricing, payer, bot, now),
         tavily_api_key=runtime.tavily_api_key,
         apis=apis,
     )
     peers = None
     if DELEGATION_TOOL in names:
-        services.delegate = Delegator(runtime, bot)
+        services.delegate = Delegator(runtime, bot, payer)
         peers = delegation_note(await owner_peers(session, bot))
     return Toolkit(
         tools=build_tools(names, apis=bool(apis)),

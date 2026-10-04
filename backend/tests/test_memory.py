@@ -152,7 +152,9 @@ async def test_recall_uses_all_facts_when_few(session, cipher) -> None:
     await add_facts(session, scope, ["a", "b"], [vec(0), vec(1)])
     embedder = FakeEmbedder()
 
-    facts = await recall_facts(session, Pricing.load(PLANS_FILE), bot, scope, "q", embedder)
+    facts = await recall_facts(
+        session, Pricing.load(PLANS_FILE), bot, bot.owner, scope, "q", embedder
+    )
 
     assert facts == ["a", "b"]
     assert embedder.calls == []
@@ -166,7 +168,9 @@ async def test_recall_searches_nearest_when_many(session, cipher) -> None:
     embedder = FakeEmbedder()
 
     # FakeEmbedder maps "q" (length 1) to axis 1, closest to "fact 1".
-    facts = await recall_facts(session, Pricing.load(PLANS_FILE), bot, scope, "q", embedder)
+    facts = await recall_facts(
+        session, Pricing.load(PLANS_FILE), bot, bot.owner, scope, "q", embedder
+    )
 
     assert facts[0] == "fact 1"
     assert len(facts) == 5

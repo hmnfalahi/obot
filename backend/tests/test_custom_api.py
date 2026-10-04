@@ -276,7 +276,7 @@ async def test_toolkit_gives_call_api_to_bots_with_endpoints(session, cipher) ->
     runtime = SimpleNamespace(
         cipher=cipher, http=None, pricing=None, tavily_api_key=None, sessionmaker=None
     )
-    plain = await toolkit(session, runtime, bot, None)
+    plain = await toolkit(session, runtime, bot, None, bot.owner)
     row = ApiEndpoint(bot_id=bot.id)
     write_endpoint(
         cipher,
@@ -290,7 +290,7 @@ async def test_toolkit_gives_call_api_to_bots_with_endpoints(session, cipher) ->
     session.add(row)
     await session.flush()
 
-    kit = await toolkit(session, runtime, bot, None)
+    kit = await toolkit(session, runtime, bot, None, bot.owner)
 
     assert "call_api" not in [t.name for t in plain.tools] and plain.note is None
     assert "call_api" in [t.name for t in kit.tools]
