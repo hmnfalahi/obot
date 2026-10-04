@@ -50,6 +50,8 @@ class Runtime:
     transport: Transport = field(repr=False, default=None)  # set once the factory is known
     updates: UpdateQueue = field(repr=False, default=None)
     miniapp_url: str | None = None
+    # Public HTTPS origin for webhook URLs given to owners (None: webhooks unavailable)
+    public_url: str | None = None
     admins: frozenset[int] = frozenset()
     # Abuse reports one person may send per day
     daily_reports: int = 5

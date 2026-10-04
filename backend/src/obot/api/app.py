@@ -32,6 +32,7 @@ async def state_from_settings() -> tuple[ApiState, list]:
         ),
         factory_token=settings.factory_bot_token.get_secret_value(),
         factory_username=me.username,
+        public_url=settings.public_base_url or settings.miniapp_url,
     )
     return state, [engine.dispose]
 

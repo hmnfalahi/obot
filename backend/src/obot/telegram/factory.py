@@ -32,7 +32,7 @@ from obot.bots.service import (
 )
 from obot.core.rules import ReplyRule, RuleKind
 from obot.db.models import Bot as BotRecord
-from obot.db.models import BotStatus, DraftKind, DraftState, FactoryDraft, User
+from obot.db.models import BotStatus, DraftKind, DraftState, FactoryDraft, TriggerKind, User
 from obot.factory.designer import BotDraft, design
 from obot.factory.drafts import (
     apply_draft,
@@ -48,6 +48,7 @@ from obot.i18n import lang_of, t
 from obot.notices import count_today
 from obot.tasks.apply import TaskSync, sync_tasks
 from obot.tasks.schedule import zone
+from obot.tasks.service import hook_url
 from obot.telegram.profile import sync_profile
 from obot.telegram.runtime import Runtime
 
@@ -118,15 +119,22 @@ def card_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def render_task_sync(lang: str, bot: BotRecord, sync: TaskSync) -> str:
+def render_task_sync(
+    lang: str, bot: BotRecord, sync: TaskSync, public_url: str | None = None
+) -> str:
     if not sync.scheduled and not sync.rejected:
         return t(lang, "tasks.none", username=bot.username)
     lines = []
     if sync.scheduled:
         lines.append(t(lang, "tasks.scheduled", username=bot.username))
         for task in sync.scheduled:
-            when = task.next_run_at.astimezone(zone(task.timezone)).strftime("%Y-%m-%d %H:%M")
-            lines.append(f"• {task.summary} ({t(lang, 'tasks.next', when=when)})")
+            line = f"• {task.summary}"
+            if task.trigger == TriggerKind.SCHEDULE:
+                when = task.next_run_at.astimezone(zone(task.timezone)).strftime("%Y-%m-%d %H:%M")
+                line += f" ({t(lang, 'tasks.next', when=when)})"
+            lines.append(line)
+            if task.trigger == TriggerKind.WEBHOOK and public_url:
+                lines.append(t(lang, "tasks.hook_url", url=hook_url(public_url, task)))
     if sync.rejected:
         lines += ["", t(lang, "tasks.rejected")]
         lines += [f"• {r.summary}: {r.reason}" for r in sync.rejected]
@@ -148,14 +156,19 @@ async def _sync_and_report(
 ) -> None:
     try:
         sync = await sync_tasks(
-            session, runtime.pricing, runtime.models.for_tier("cheap"), record, requests
+            session,
+            runtime.pricing,
+            runtime.models.for_tier("cheap"),
+            record,
+            requests,
+            public_url=runtime.public_url,
         )
     except Exception:
         log.exception("scheduling tasks of bot %s failed", record.id)
         await bot.send_message(chat_id, t(lang, "factory.error"))
         return
     if requests or sync.rejected:
-        await bot.send_message(chat_id, render_task_sync(lang, record, sync))
+        await bot.send_message(chat_id, render_task_sync(lang, record, sync, runtime.public_url))
 
 
 # --- commands --------------------------------------------------------------------------

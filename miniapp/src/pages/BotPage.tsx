@@ -202,7 +202,15 @@ function TaskCard(props: {
         <strong>{task.summary}</strong>
         {task.status !== 'active' && <span className="badge">{t(`status.${task.status}`)}</span>}
       </div>
-      <div className="hint">{destination}</div>
+      <div className="hint">
+        {t(`trigger.${task.trigger}`)} · {destination}
+      </div>
+      {task.hook_url && (
+        <div className="hint">
+          {t('hookUrl')}
+          <input dir="ltr" readOnly value={task.hook_url} onFocus={(e) => e.target.select()} />
+        </div>
+      )}
       {task.next_run_at && task.status !== 'paused' && (
         <div className="hint">
           {t('next')}: {formatDateTime(task.next_run_at, lang, me.timezone)}

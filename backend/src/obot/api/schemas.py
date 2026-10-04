@@ -51,7 +51,9 @@ class TaskOut(BaseModel):
     id: int
     summary: str
     instruction: str
-    schedule_kind: str
+    trigger: str
+    hook_url: str | None
+    schedule_kind: str | None
     cron: str | None
     timezone: str
     destination_chat_id: int

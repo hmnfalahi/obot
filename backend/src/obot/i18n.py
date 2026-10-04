@@ -73,6 +73,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tasks.rejected": "⚠️ Not scheduled:",
         "tasks.waiting": "Tasks that message you start after you press Start in @{username}.",
         "tasks.none": "@{username} has no scheduled tasks now.",
+        "tasks.hook_url": "  Call this address (POST) to trigger it; keep it secret: {url}",
         "owner.task_waiting": (
             "@{username} has a scheduled task for you, but you haven't pressed Start in it yet."
         ),
@@ -159,6 +160,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "کارهایی که برای تو پیام می‌فرستن، بعد از زدن Start در @{username} شروع می‌شن."
         ),
         "tasks.none": "@{username} الان کار زمان‌بندی‌شده‌ای نداره.",
+        "tasks.hook_url": "  برای اجرا این آدرس رو (POST) صدا بزن و محرمانه نگهش دار: {url}",
         "owner.task_waiting": (
             "@{username} یه کار زمان‌بندی‌شده برات داره، ولی هنوز Start رو توش نزدی."
         ),
