@@ -296,3 +296,16 @@ def test_task_prompt_asks_for_bot_language() -> None:
 
     assert "'fa'" in task_prompt(task, "fa")
     assert "language" not in task_prompt(task, None)
+
+
+async def test_a_one_off_draft_confirmed_too_late_is_refused(session, cipher, pricing) -> None:
+    bot = await make_bot(session, cipher)
+    item = planned(schedule="once", cron=None, run_at="2026-10-03T18:00")
+    [draft], _ = build_tasks([item], bot, bot.owner, [], pricing.plan("free"), 0, NOW)
+    session.add(draft)
+    await session.flush()
+    too_late = datetime(2026, 10, 3, 18, 1, tzinfo=TEHRAN)
+
+    problem = await confirm_draft(session, draft, bot.owner, pricing.plan("free"), too_late)
+
+    assert "already passed" in problem and draft.status == TaskStatus.CANCELLED

@@ -15,6 +15,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from obot.bots.access import can_use
 from obot.bots.users import join_bot
 from obot.chat.membership import list_memberships
 from obot.db.models import Bot as BotRecord
@@ -165,6 +166,11 @@ async def on_tasks(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
     lang = lang_of(message.from_user.language_code)
+    if not can_use(bot_record, message.from_user.id):
+        await runtime.sender.send_text(
+            message.bot, message.chat.id, t(lang, "bot.private"), group=False
+        )
+        return
     user, _ = await join_bot(
         session, bot_record, message.from_user.id, message.from_user.language_code
     )
@@ -186,7 +192,12 @@ async def on_task_button(
     _, action, task_id = query.data.split(":", 2)
     task = await session.get(Task, int(task_id)) if task_id.isdigit() else None
     user = await session.get(User, task.user_id) if task else None
-    if task is None or task.bot_id != bot_record.id or user.tg_user_id != query.from_user.id:
+    if (
+        task is None
+        or task.bot_id != bot_record.id
+        or user.tg_user_id != query.from_user.id
+        or not can_use(bot_record, query.from_user.id)
+    ):
         await query.answer(t(lang, "task.not_yours"), show_alert=True)
         return
     now = datetime.now(UTC)
