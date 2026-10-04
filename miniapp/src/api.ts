@@ -11,6 +11,7 @@ export interface Quota {
 
 export interface Me {
   tg_user_id: number
+  model_tiers: string[]
   language: Lang
   timezone: string
   plan: string
@@ -68,6 +69,7 @@ export interface BotUpdate {
   system_prompt?: string
   language?: string
   tools?: ToolName[]
+  model_tier?: 'cheap' | 'strong'
   daily_credit_cap?: number
   clear_daily_credit_cap?: boolean
 }
@@ -89,6 +91,12 @@ export interface NewBot {
   system_prompt: string
   language: string
   tools: ToolName[]
+}
+
+export interface StarPackage {
+  id: string
+  stars: number
+  credits: number
 }
 
 export class ApiError extends Error {
@@ -132,6 +140,9 @@ export const api = {
     request<TaskAdd>('POST', `/bots/${id}/tasks`, { request: text }),
   pauseTask: (id: number, paused: boolean) => request<Task>('PATCH', `/tasks/${id}`, { paused }),
   deleteTask: (id: number) => request<void>('DELETE', `/tasks/${id}`),
+  packages: () => request<StarPackage[]>('GET', '/billing/packages'),
+  invoice: (packageId: string) =>
+    request<{ link: string }>('POST', '/billing/invoice', { package_id: packageId }),
   newBot: (body: NewBot) =>
     request<{ create_link: string; suggested_username: string }>('POST', '/bots/drafts', body),
 }

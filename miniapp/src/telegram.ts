@@ -15,6 +15,7 @@ interface WebApp {
   ready(): void
   expand(): void
   openTelegramLink(url: string): void
+  openInvoice(url: string, callback?: (status: 'paid' | 'cancelled' | 'failed' | 'pending') => void): void
   showAlert(message: string): void
   BackButton: BackButton
   HapticFeedback?: { notificationOccurred(type: 'success' | 'error' | 'warning'): void }
@@ -45,4 +46,15 @@ export function openTelegramLink(url: string): void {
 
 export function haptic(type: 'success' | 'error'): void {
   webApp?.HapticFeedback?.notificationOccurred(type)
+}
+
+/** Opens Telegram's Stars payment sheet; resolves with its final status. */
+export function openInvoice(url: string): Promise<string> {
+  return new Promise((resolve) => {
+    if (webApp?.initData) webApp.openInvoice(url, resolve)
+    else {
+      window.open(url, '_blank')
+      resolve('pending')
+    }
+  })
 }

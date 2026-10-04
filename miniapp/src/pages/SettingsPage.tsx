@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { api, type Lang, type Me } from '../api'
+import { useLoad } from '../hooks'
 import { formatNumber, useI18n } from '../i18n'
+import { haptic, openInvoice } from '../telegram'
 
 const TIMEZONES = [
   'Asia/Tehran',
@@ -26,6 +28,27 @@ export function SettingsPage({ me, onChange }: { me: Me; onChange: (m: Me) => vo
       onChange(await api.updateMe(body))
     } catch (e) {
       setError((e as Error).message)
+    }
+  }
+
+  const packages = useLoad(() => api.packages(), [])
+  const [buying, setBuying] = useState<string | null>(null)
+
+  const buy = async (packageId: string) => {
+    setBuying(packageId)
+    setError(null)
+    try {
+      const { link } = await api.invoice(packageId)
+      const status = await openInvoice(link)
+      if (status === 'paid') {
+        haptic('success')
+        // The factory bot records the payment; give it a moment, then refresh the balance.
+        setTimeout(() => api.me().then(onChange), 1500)
+      }
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBuying(null)
     }
   }
 
@@ -69,6 +92,16 @@ export function SettingsPage({ me, onChange }: { me: Me; onChange: (m: Me) => vo
           <span>{t('searchesToday')}</span>
           <strong>{quota(me.searches_today)}</strong>
         </div>
+      </div>
+
+      <h2>{t('buyCredits')}</h2>
+      <div className="card">
+        <p className="hint">{t('buyHint')}</p>
+        {packages.data?.map((p) => (
+          <button key={p.id} className="btn block" disabled={buying !== null} onClick={() => buy(p.id)}>
+            {t('starsFor', { stars: formatNumber(p.stars, lang), credits: formatNumber(p.credits, lang) })}
+          </button>
+        ))}
       </div>
     </>
   )

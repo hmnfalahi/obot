@@ -13,6 +13,7 @@ class Quota(BaseModel):
 
 class MeOut(BaseModel):
     tg_user_id: int
+    model_tiers: list[str]
     language: Literal["fa", "en"]
     timezone: str
     plan: str
@@ -69,12 +70,27 @@ class BotDetail(BotSummary):
     tasks: list[TaskOut]
 
 
+class PackageOut(BaseModel):
+    id: str
+    stars: int
+    credits: int
+
+
+class InvoiceIn(BaseModel):
+    package_id: str
+
+
+class InvoiceOut(BaseModel):
+    link: str
+
+
 class BotUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=120)
     system_prompt: str | None = Field(default=None, max_length=8000)
     language: str | None = Field(default=None, max_length=8)
     tools: list[ToolName] | None = None
+    model_tier: Literal["cheap", "strong"] | None = None
     daily_credit_cap: int | None = Field(default=None, ge=0)
     clear_daily_credit_cap: bool = False
 

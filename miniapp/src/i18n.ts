@@ -45,6 +45,13 @@ const en = {
   searchesToday: 'Web searches today',
   appLanguage: 'App language',
   timezone: 'Timezone',
+  buyCredits: 'Buy credits',
+  buyHint: 'Buying moves you to the paid plan: all usage then comes from credits, stronger models unlock and limits rise.',
+  starsFor: '{stars} ⭐ → {credits} credits',
+  paid: 'Credits added',
+  model: 'Model',
+  'model.cheap': 'Fast and cheap',
+  'model.strong': 'Strong (paid plan)',
   'status.active': 'active',
   'status.suspended': 'suspended (plan limit)',
   'status.disabled': 'disabled',
@@ -103,6 +110,13 @@ const fa: Record<Key, string> = {
   searchesToday: 'جستجوهای امروز',
   appLanguage: 'زبان برنامه',
   timezone: 'منطقه‌ی زمانی',
+  buyCredits: 'خرید اعتبار',
+  buyHint: 'با خرید به پلن پولی می‌ری: همه‌ی مصرف از اعتبار کم می‌شه، مدل‌های قوی‌تر باز می‌شن و سقف‌ها بالاتر می‌رن.',
+  starsFor: '{stars} ⭐ ← {credits} اعتبار',
+  paid: 'اعتبار اضافه شد',
+  model: 'مدل',
+  'model.cheap': 'سریع و ارزان',
+  'model.strong': 'قوی (پلن پولی)',
   'status.active': 'فعال',
   'status.suspended': 'غیرفعال (سقف پلن)',
   'status.disabled': 'مسدود',
@@ -117,10 +131,13 @@ const fa: Record<Key, string> = {
 
 const catalogs: Record<Lang, Record<Key, string>> = { en, fa }
 
-export type Translate = (key: Key | string) => string
+export type Translate = (key: Key | string, params?: Record<string, string | number>) => string
 
 export function translator(lang: Lang): Translate {
-  return (key) => catalogs[lang][key as Key] ?? en[key as Key] ?? key
+  return (key, params) => {
+    const template = catalogs[lang][key as Key] ?? en[key as Key] ?? key
+    return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params?.[name] ?? `{${name}}`))
+  }
 }
 
 export const I18n = createContext<{ lang: Lang; t: Translate }>({ lang: 'fa', t: translator('fa') })

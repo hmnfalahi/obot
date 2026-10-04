@@ -20,7 +20,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "Just tell me what your bot should do, for example:\n"
             "• Every morning at 8, get the dollar price from tgju.org and send it to me\n"
             "• A friendly English tutor that corrects my mistakes\n\n"
-            "Commands: /mybots — your bots, /cancel — drop the current draft"
+            "Commands: /mybots — your bots, /buy — buy credits, /cancel — drop the current draft"
         ),
         "factory.mybots_empty": "You have no bots yet. Describe one and I'll build it.",
         "factory.mybots_header": 'Your bots (send a message like "make @bot more formal" to edit):',
@@ -72,6 +72,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "owner.task_failed": '⚠️ Task "{summary}" of @{username} failed: {error}',
         "forget.admins_only": "Only group admins can do that.",
+        "buy.menu": (
+            "Your credit balance: {balance}\n\n"
+            "Buying credits moves you to the paid plan: every reply, search and task then "
+            "uses credits, stronger models unlock and the limits are higher."
+        ),
+        "buy.button": "{stars} ⭐ → {credits} credits",
+        "buy.title": "{credits} Obot credits",
+        "buy.description": "{credits} credits for your Obot bots: replies, web search and tasks.",
+        "buy.done": "✅ {credits} credits added. Balance: {balance}.",
     },
     "fa": {
         "quota.daily_messages": "سهمیه‌ی پیام امروزم تموم شده. فردا برمی‌گردم!",
@@ -91,7 +100,7 @@ MESSAGES: dict[str, dict[str, str]] = {
             "فقط بگو رباتت چی کار کنه، مثلاً:\n"
             "• هر روز ساعت ۸ صبح قیمت دلار رو از tgju.org بگیر و برام بفرست\n"
             "• یه معلم زبان انگلیسی مهربون که اشتباهاتم رو درست کنه\n\n"
-            "دستورها: /mybots — ربات‌هات، /cancel — حذف پیش‌نویس فعلی"
+            "دستورها: /mybots — ربات‌هات، /buy — خرید اعتبار، /cancel — حذف پیش‌نویس فعلی"
         ),
         "factory.mybots_empty": "هنوز رباتی نداری. توضیح بده چی می‌خوای تا بسازمش.",
         "factory.mybots_header": "ربات‌هات (برای ویرایش مثلاً بنویس «@bot رو رسمی‌تر کن»):",
@@ -143,6 +152,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "owner.task_failed": "⚠️ کار «{summary}» از @{username} اجرا نشد: {error}",
         "forget.admins_only": "فقط ادمین‌های گروه می‌تونن این کار رو بکنن.",
+        "buy.menu": (
+            "موجودی اعتبارت: {balance}\n\n"
+            "با خرید اعتبار به پلن پولی می‌ری: از اون به بعد هر پاسخ، جستجو و کار از اعتبار "
+            "کم می‌شه، مدل‌های قوی‌تر باز می‌شن و سقف‌ها بالاتر می‌رن."
+        ),
+        "buy.button": "{stars} ⭐ ← {credits} اعتبار",
+        "buy.title": "{credits} اعتبار Obot",
+        "buy.description": "{credits} اعتبار برای ربات‌های Obot: پاسخ‌ها، جستجوی وب و کارها.",
+        "buy.done": "✅ {credits} اعتبار اضافه شد. موجودی: {balance}.",
     },
 }
 
