@@ -16,6 +16,7 @@ from obot.api.app import create_app
 from obot.api.deps import ApiState
 from obot.billing.plans import ModelPrice, Pricing
 from obot.config import get_settings
+from obot.core.byok import Failure, KeyCheckFailed
 from obot.crypto import TokenCipher
 from obot.db.models import Base
 
@@ -63,9 +64,23 @@ API_FACTORY_TOKEN = "123:factory-secret"
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
 
 
+class FakeByok:
+    """Key checks without network: records them, fails with `failure` when set."""
+
+    def __init__(self) -> None:
+        self.checked: list[tuple[str, str, str]] = []
+        self.failure: Failure | None = None
+
+    async def check(self, provider: str, model: str, api_key: str) -> None:
+        self.checked.append((provider, model, api_key))
+        if self.failure is not None:
+            raise KeyCheckFailed(self.failure)
+
+
 class FakeModels:
     def __init__(self) -> None:
         self.model = TestModel()
+        self.byok = FakeByok()
 
     def for_tier(self, tier: str):
         return self.model

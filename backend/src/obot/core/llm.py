@@ -6,6 +6,8 @@ from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.settings import ModelSettings
 
+from obot.core.byok import Byok
+
 os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -34,6 +36,8 @@ class ModelRegistry:
         # against the account balance; it also caps the cost of a single reply.
         self._settings = ModelSettings(max_tokens=max_output_tokens)
         self._cache: dict[str, Model] = {}
+        # Models on owners' own keys (bring your own key)
+        self.byok = Byok(max_output_tokens)
 
     def for_tier(self, tier: str) -> Model:
         name = self._names.get(tier) or self._names["cheap"]

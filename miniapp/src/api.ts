@@ -76,11 +76,28 @@ export interface ReplyRule {
   instruction?: string
 }
 
+export type Provider = 'openrouter' | 'openai' | 'anthropic'
+export const PROVIDERS: Provider[] = ['openrouter', 'openai', 'anthropic']
+
+export interface Byok {
+  provider: Provider
+  model: string
+  key_hint: string
+}
+
+export interface ByokIn {
+  provider: Provider
+  model: string
+  /** Omit to keep the stored key of the same provider. */
+  api_key?: string
+}
+
 export interface BotDetail extends BotSummary {
   reply_rules: ReplyRule[]
   system_prompt: string
   language: string
   model_tier: string
+  byok: Byok | null
   daily_credit_cap: number | null
   chats: Chat[]
   tasks: Task[]
@@ -159,6 +176,8 @@ export const api = {
   bots: () => request<BotSummary[]>('GET', '/bots'),
   bot: (id: number) => request<BotDetail>('GET', `/bots/${id}`),
   updateBot: (id: number, body: BotUpdate) => request<BotDetail>('PATCH', `/bots/${id}`, body),
+  setByok: (id: number, body: ByokIn) => request<BotDetail>('PUT', `/bots/${id}/byok`, body),
+  deleteByok: (id: number) => request<BotDetail>('DELETE', `/bots/${id}/byok`),
   usage: (id: number, days = 7) => request<UsageDay[]>('GET', `/bots/${id}/usage?days=${days}`),
   addTask: (id: number, text: string) =>
     request<TaskAdd>('POST', `/bots/${id}/tasks`, { request: text }),

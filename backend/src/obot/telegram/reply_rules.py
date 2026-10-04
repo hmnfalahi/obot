@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.usage import check_llm_quota, record_llm_usage
+from obot.bots.byok import uses_byok
 from obot.core.memory import Embedder
 from obot.core.rules import (
     TOPIC_SIMILARITY_THRESHOLD,
@@ -83,7 +84,10 @@ async def pick_rule(
     if not rules:
         return None
     # Unprompted replies stay silent when out of quota, instead of announcing it.
-    if not (await check_llm_quota(session, runtime.pricing, bot.owner, bot, now)).allowed:
+    quota = await check_llm_quota(
+        session, runtime.pricing, bot.owner, bot, now, byok=uses_byok(bot)
+    )
+    if not quota.allowed:
         return None
 
     chosen: tuple[int, ReplyRule] | None = None

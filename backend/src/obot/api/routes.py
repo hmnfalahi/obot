@@ -6,11 +6,13 @@ from aiogram import Bot as TelegramBot
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import Date, case, cast, func, select
 
-from obot.api.deps import CurrentUser, OwnedBot, OwnedTask, Session, State
+from obot.api.deps import ApiState, CurrentUser, OwnedBot, OwnedTask, Session, State
 from obot.api.schemas import (
     BotDetail,
     BotSummary,
     BotUpdate,
+    ByokIn,
+    ByokOut,
     ChatOut,
     InvoiceIn,
     InvoiceOut,
@@ -27,9 +29,12 @@ from obot.api.schemas import (
     TaskUpdate,
     UsageDay,
 )
-from obot.billing.usage import start_of_day
+from obot.billing.usage import count_messages, start_of_day
+from obot.bots.byok import clear_key, key_hint, read_key, set_key, uses_byok
 from obot.chat.membership import list_memberships
+from obot.core.byok import KeyCheckFailed
 from obot.core.rules import parse_rules
+from obot.crypto import TokenCipher
 from obot.db.models import Bot, DraftState, Task, TaskRun, UsageEvent, UsageKind, User
 from obot.factory.designer import BotDraft
 from obot.factory.drafts import start_draft
@@ -52,6 +57,8 @@ MAX_USAGE_DAYS = 31
 
 async def _count_today(session: Session, user: User, kind: UsageKind) -> int:
     since = start_of_day(datetime.now(UTC), user.timezone)
+    if kind == UsageKind.LLM:
+        return await count_messages(session, user, since)
     return await session.scalar(
         select(func.count()).where(
             UsageEvent.owner_id == user.id, UsageEvent.kind == kind, UsageEvent.created_at >= since
@@ -139,15 +146,23 @@ async def _task_out(
     )
 
 
-async def _detail(session: Session, bot: Bot, public_url: str | None = None) -> BotDetail:
+def _byok(cipher: TokenCipher, bot: Bot) -> ByokOut | None:
+    if not uses_byok(bot):
+        return None
+    return ByokOut(provider=bot.byok_provider, model=bot.byok_model, key_hint=key_hint(cipher, bot))
+
+
+async def _detail(session: Session, state: ApiState, bot: Bot) -> BotDetail:
     persona = bot.persona or {}
     owner_tg_id = bot.owner.tg_user_id
+    public_url = state.public_url
     return BotDetail(
         **_summary(bot).model_dump(),
         reply_rules=parse_rules(bot.reply_rules or []),
         system_prompt=persona.get("system_prompt", ""),
         language=persona.get("language", "fa"),
         model_tier=bot.model_tier,
+        byok=_byok(state.cipher, bot),
         daily_credit_cap=bot.daily_credit_cap,
         chats=[
             ChatOut(id=m.tg_chat_id, title=m.title, type=m.chat_type, is_admin=m.is_admin)
@@ -168,7 +183,7 @@ async def list_bots(user: CurrentUser, session: Session) -> list[BotSummary]:
 
 @router.get("/bots/{bot_id}")
 async def get_bot(bot: OwnedBot, session: Session, state: State) -> BotDetail:
-    return await _detail(session, bot, state.public_url)
+    return await _detail(session, state, bot)
 
 
 @router.patch("/bots/{bot_id}")
@@ -213,7 +228,35 @@ async def update_bot(body: BotUpdate, bot: OwnedBot, session: Session, state: St
             language=persona.get("language", "fa"),
         )
         await sync_profile(token, draft, set_name=name_changed, set_description=description_changed)
-    return await _detail(session, bot, state.public_url)
+    return await _detail(session, state, bot)
+
+
+@router.put("/bots/{bot_id}/byok")
+async def set_byok(body: ByokIn, bot: OwnedBot, session: Session, state: State) -> BotDetail:
+    """Store the bot's own provider key after checking that it works with the model.
+
+    A failed check answers 422 with the reason (auth, quota, model, provider) as detail.
+    """
+    api_key = body.api_key
+    if api_key is None:
+        if not uses_byok(bot) or bot.byok_provider != body.provider:
+            raise HTTPException(422, "api_key is required")
+        api_key = read_key(state.cipher, bot)
+    api_key = api_key.strip()
+    try:
+        await state.models.byok.check(body.provider, body.model, api_key)
+    except KeyCheckFailed as e:
+        raise HTTPException(422, e.failure.value) from e
+    set_key(state.cipher, bot, body.provider, body.model, api_key)
+    await session.flush()
+    return await _detail(session, state, bot)
+
+
+@router.delete("/bots/{bot_id}/byok")
+async def delete_byok(bot: OwnedBot, session: Session, state: State) -> BotDetail:
+    clear_key(bot)
+    await session.flush()
+    return await _detail(session, state, bot)
 
 
 @router.get("/bots/{bot_id}/usage")

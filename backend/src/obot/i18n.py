@@ -95,6 +95,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "receipt.received": "Receipt received. We'll add your credits after checking it.",
         "receipt.granted": "✅ {credits} credits added. Balance: {balance}.",
         "receipt.rejected": "Your receipt could not be confirmed. Please contact support.",
+        "byok.chat_failed": "Sorry, I can't reply right now. My owner has been told.",
+        "owner.byok_failed": (
+            "⚠️ @{username} could not reply with your {provider} key: {reason}. "
+            "Check the key in the bot's settings in the panel."
+        ),
+        "byok.reason.auth": "the key is invalid or was revoked",
+        "byok.reason.quota": "the account is out of credit or rate-limited",
+        "byok.reason.model": "the model was not found or the key cannot use it",
+        "byok.reason.provider": "the provider returned an error or did not respond",
     },
     "fa": {
         "quota.daily_messages": "سهمیه‌ی پیام امروزم تموم شده. فردا برمی‌گردم!",
@@ -189,6 +198,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "receipt.received": "رسید دریافت شد. بعد از بررسی اعتبارت اضافه می‌شه.",
         "receipt.granted": "✅ {credits} اعتبار اضافه شد. موجودی: {balance}.",
         "receipt.rejected": "رسیدت تأیید نشد. لطفاً با پشتیبانی تماس بگیر.",
+        "byok.chat_failed": "ببخشید، الان نمی‌تونم جواب بدم. به صاحبم خبر دادم.",
+        "owner.byok_failed": (
+            "⚠️ @{username} با کلید {provider} تو نتونست جواب بده: {reason}. "
+            "کلید رو در تنظیمات ربات در پنل بررسی کن."
+        ),
+        "byok.reason.auth": "کلید نامعتبره یا باطل شده",
+        "byok.reason.quota": "اعتبار حساب تموم شده یا محدودیت نرخ خورده",
+        "byok.reason.model": "مدل پیدا نشد یا این کلید به اون دسترسی نداره",
+        "byok.reason.provider": "سرویس‌دهنده خطا داد یا جواب نداد",
     },
 }
 

@@ -70,6 +70,11 @@ class Bot(Base):
     token_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
     persona: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     model_tier: Mapped[str] = mapped_column(String(32), default="cheap")
+    # Bring your own key: replies use the owner's provider account instead of model_tier.
+    # The key is AES-GCM encrypted, bound to the bot id; see obot.bots.byok.
+    byok_provider: Mapped[str | None] = mapped_column(String(16))
+    byok_model: Mapped[str | None] = mapped_column(String(128))
+    byok_key_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     tools: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     # Group reply rules; see obot.core.rules
     reply_rules: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
@@ -152,6 +157,8 @@ class UsageEvent(Base):
     tokens_out: Mapped[int] = mapped_column(BigInteger, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 8))
     credits: Mapped[int] = mapped_column(BigInteger)
+    # Paid with the owner's own key: free for them and not counted against plan limits.
+    byok: Mapped[bool] = mapped_column(default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
