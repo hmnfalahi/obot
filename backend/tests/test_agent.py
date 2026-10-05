@@ -15,6 +15,13 @@ def test_instructions_use_persona_or_default() -> None:
     assert "plain text" in default
 
 
+def test_instructions_send_scheduling_to_the_schedule_task_tool() -> None:
+    text = build_instructions(BotProfile("Rex"))
+
+    assert "schedule_task" in text
+    assert "factory" not in text
+
+
 async def test_generate_reply_sends_instructions_and_history() -> None:
     seen: list[ModelMessage] = []
 

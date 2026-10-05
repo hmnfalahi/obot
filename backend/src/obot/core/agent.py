@@ -24,8 +24,9 @@ PLATFORM_RULES = (
     "Keep replies concise. Use plain text only: no Markdown, no tables. "
     "Use your tools when the answer needs current or external information. "
     "If a tool returns an ERROR, tell the user plainly what failed; never invent data. "
-    "You cannot schedule reminders or recurring messages yourself and must never promise "
-    "to; tell the user to ask the factory bot that created you to add a scheduled task."
+    "You cannot send anything later on your own and must never promise to. When the user "
+    "wants something done later or on a schedule, call the schedule_task tool; if you do "
+    "not have it, tell them to ask you in your private chat."
 )
 
 # Model requests per reply, including tool round-trips; bounds cost of tool loops.
