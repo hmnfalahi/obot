@@ -28,7 +28,9 @@ body {
 #root {
   max-width: 640px;
   margin: 0 auto;
-  padding: 12px 12px 32px;
+  /* Telegram sets these in full screen; they are 0 otherwise. */
+  padding: calc(12px + var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)) 12px
+    calc(32px + var(--tg-safe-area-inset-bottom, 0px));
 }
 
 h1 {
@@ -222,4 +224,18 @@ button {
   display: flex;
   justify-content: space-between;
   padding: 4px 0;
+}
+
+/* Bottom buttons drawn in the page outside Telegram (development) or on old clients. */
+.bottom-fallback {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 0 calc(8px + var(--tg-safe-area-inset-bottom, 0px));
+  background: var(--bg2);
+}
+
+.bottom-fallback .btn {
+  flex: 1;
 }
