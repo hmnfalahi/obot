@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api, type Me, type Task } from '../api'
 import { formatDateTime, useI18n } from '../i18n'
 import { useLoad } from '../hooks'
-import { haptic } from '../telegram'
+import { confirm, haptic } from '../telegram'
 import { ErrorBox, Loading } from '../ui'
 
 /** The user's own scheduled tasks on every bot; they make them by asking a bot in private. */
@@ -43,7 +43,10 @@ export function TasksPage({ me }: { me: Me }) {
           me={me}
           busy={busy}
           onPause={(paused) => run(() => api.pauseTask(task.id, paused))}
-          onDelete={() => run(() => api.deleteTask(task.id))}
+          onDelete={async () => {
+            if (await confirm(t('deleteTaskConfirm'), { action: t('delete'), destructive: true }))
+              run(() => api.deleteTask(task.id))
+          }}
         />
       ))}
       {error && <p className="error">{error}</p>}

@@ -127,15 +127,15 @@ export function confirm(message: string, opts: { action?: string; destructive?: 
 }
 
 export function haptic(type: 'success' | 'error'): void {
-  webApp?.HapticFeedback?.notificationOccurred(type)
+  if (supports('6.1')) webApp?.HapticFeedback?.notificationOccurred(type)
 }
 
 export function selectionHaptic(): void {
-  webApp?.HapticFeedback?.selectionChanged()
+  if (supports('6.1')) webApp?.HapticFeedback?.selectionChanged()
 }
 
 export function impactHaptic(style: 'light' | 'medium' | 'heavy' = 'light'): void {
-  webApp?.HapticFeedback?.impactOccurred(style)
+  if (supports('6.1')) webApp?.HapticFeedback?.impactOccurred(style)
 }
 
 /** Opens Telegram's Stars payment sheet; resolves with its final status. */
@@ -222,7 +222,11 @@ export const bottomButtons = createBottomButtons({
   show(slot: Slot, o: BottomButtonOptions) {
     const button = telegramButton(slot)
     if (!button) return
-    button.setParams({ text: o.text, is_active: !o.disabled && !o.loading, has_shine_effect: Boolean(o.shine) })
+    button.setParams({
+      text: o.text,
+      is_active: !o.disabled && !o.loading,
+      ...(supports('7.10') ? { has_shine_effect: Boolean(o.shine) } : {}),
+    })
     if (o.loading) button.showProgress(false)
     else button.hideProgress()
     button.show()

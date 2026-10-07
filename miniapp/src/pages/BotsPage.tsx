@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api, type Me, type UsedBot } from '../api'
-import type { Route } from '../App'
+import type { Route } from '../nav'
 import { formatNumber, useI18n } from '../i18n'
 import { useLoad } from '../hooks'
 import { confirm, haptic } from '../telegram'

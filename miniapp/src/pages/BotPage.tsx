@@ -11,7 +11,7 @@ import {
 } from '../api'
 import { formatNumber, useI18n } from '../i18n'
 import { confirm, haptic, openTelegramLink } from '../telegram'
-import type { Route } from '../App'
+import type { Route } from '../nav'
 import { useLoad } from '../hooks'
 import { ErrorBox, Loading } from '../ui'
 

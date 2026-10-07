@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api, ApiError, MODEL_EXAMPLES, PROVIDER_NAMES, type MySettings, type Provider } from '../api'
-import type { Route } from '../App'
+import type { Route } from '../nav'
 import { useLoad } from '../hooks'
 import { useI18n } from '../i18n'
 import { haptic } from '../telegram'
@@ -77,7 +77,7 @@ function Form({
         {settings.wallet.length === 0 && (
           <p className="hint">
             {t('walletEmptyHint')}{' '}
-            <button className="btn secondary" onClick={() => navigate({ page: 'settings' })}>
+            <button className="btn secondary" onClick={() => navigate({ page: 'credits' })}>
               {t('openWallet')}
             </button>
           </p>

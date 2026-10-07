@@ -239,3 +239,50 @@ button {
 .bottom-fallback .btn {
   flex: 1;
 }
+
+/* Room so the fixed tab bar never covers the end of a page. */
+.has-tabbar {
+  padding-bottom: calc(72px + var(--tg-safe-area-inset-bottom, 0px));
+}
+
+.tabbar {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+  border-top: 0.5px solid color-mix(in srgb, var(--hint) 30%, transparent);
+  padding-bottom: var(--tg-safe-area-inset-bottom, 0px);
+  z-index: 10;
+}
+
+.tabbar button {
+  flex: 1;
+  max-width: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0 8px;
+  border: none;
+  background: none;
+  color: var(--hint);
+  font-size: 11px;
+}
+
+.tabbar button.active {
+  color: var(--link);
+}
+
+.tabbar-icon {
+  font-size: 22px;
+  line-height: 1;
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+
+.tabbar button.active .tabbar-icon {
+  filter: none;
+  opacity: 1;
+}

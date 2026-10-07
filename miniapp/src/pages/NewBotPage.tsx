@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { api, TOOLS, type ToolName } from '../api'
 import { useI18n } from '../i18n'
+import type { Route } from '../nav'
 import { haptic, openTelegramLink } from '../telegram'
+import { useDirtyGuard, useMainButton } from '../telegramHooks'
 
-export function NewBotPage({ onDone }: { onDone: () => void }) {
+export function NewBotPage({ navigate }: { navigate: (r: Route) => void }) {
   const { t, lang } = useI18n()
   const [form, setForm] = useState({
     name: '',
@@ -29,7 +31,7 @@ export function NewBotPage({ onDone }: { onDone: () => void }) {
       haptic('success')
       // Telegram's own dialog creates the bot; the factory then applies this draft.
       openTelegramLink(create_link)
-      onDone()
+      navigate({ page: 'bots' })
     } catch (e) {
       setError((e as Error).message)
       haptic('error')
@@ -37,6 +39,14 @@ export function NewBotPage({ onDone }: { onDone: () => void }) {
       setBusy(false)
     }
   }
+
+  useMainButton({
+    text: t('createInTelegram'),
+    onClick: create,
+    disabled: !form.name.trim() || !form.system_prompt.trim(),
+    loading: busy,
+  })
+  useDirtyGuard(Boolean(form.name || form.description || form.system_prompt))
 
   return (
     <>
@@ -60,9 +70,6 @@ export function NewBotPage({ onDone }: { onDone: () => void }) {
             <input type="checkbox" checked={form.tools.includes(tool)} onChange={() => toggleTool(tool)} />
           </label>
         ))}
-        <button className="btn block" disabled={busy || !form.name.trim() || !form.system_prompt.trim()} onClick={create}>
-          {t('createInTelegram')}
-        </button>
         <p className="hint">{t('createHint')}</p>
         {error && <p className="error">{error}</p>}
       </div>

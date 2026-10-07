@@ -1,4 +1,4 @@
-import { useI18n } from './i18n'
+import { useI18n } from '../i18n'
 
 export function Loading() {
   const { t } = useI18n()
@@ -20,3 +20,6 @@ export function ErrorBox({ message, onRetry }: { message: string; onRetry?: () =
     </div>
   )
 }
+
+export { BottomButtonsFallback } from './BottomButtonsFallback'
+export { TabBar } from './TabBar'

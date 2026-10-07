@@ -1,36 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useState } from 'react'
 import { api, type Lang, type Me } from './api'
 import { I18n, translator } from './i18n'
+import { currentTab, initialStack, isTab, reduce, type Route, type Tab } from './nav'
 import { BotPage } from './pages/BotPage'
 import { BotsPage } from './pages/BotsPage'
+import { CreditsPage } from './pages/CreditsPage'
 import { MySettingsPage } from './pages/MySettingsPage'
 import { NewBotPage } from './pages/NewBotPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TasksPage } from './pages/TasksPage'
-import { startParam, webApp } from './telegram'
-import { ErrorBox, Loading } from './ui'
+import { cloudGet, cloudSet, onSettingsButton, selectionHaptic, startParam, webApp } from './telegram'
+import { BottomButtonsFallback, ErrorBox, Loading, TabBar } from './ui'
 
-export type Route =
-  | { page: 'bots' }
-  | { page: 'bot'; id: number }
-  | { page: 'new' }
-  | { page: 'settings' }
-  | { page: 'tasks' }
-  | { page: 'mine'; id: number }
-
-/** The factory opens one bot with ?bot=<id> (web_app button) or start_param "bot_<id>" (link),
- * and someone's own settings for a bot with ?mine=<id>. */
-function initialRoute(): Route {
-  const mine = Number(new URLSearchParams(window.location.search).get('mine'))
-  if (mine > 0) return { page: 'mine', id: mine }
-  const fromQuery = new URLSearchParams(window.location.search).get('bot')
-  const fromStart = /^bot_(\d+)$/.exec(startParam() ?? '')?.[1]
-  const id = Number(fromQuery ?? fromStart)
-  return id > 0 ? { page: 'bot', id } : { page: 'bots' }
-}
+const LAST_TAB = 'last_tab'
 
 export default function App() {
-  const [route, setRoute] = useState<Route>(initialRoute)
+  const [stack, dispatch] = useReducer(reduce, undefined, () =>
+    initialStack(window.location.search, startParam()),
+  )
   const [me, setMe] = useState<Me | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -53,26 +40,59 @@ export default function App() {
     document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr'
   }, [lang])
 
-  // Telegram's back button returns to the bot list from any inner page.
+  const navigate = useCallback((route: Route) => dispatch({ type: 'push', route }), [])
+  const selectTab = useCallback((tab: Tab) => {
+    selectionHaptic()
+    dispatch({ type: 'tab', tab })
+  }, [])
+
+  // Reopen on the tab used last time, unless Telegram opened a specific page.
+  useEffect(() => {
+    if (stack.length > 1) return
+    cloudGet(LAST_TAB).then((tab) => {
+      if (tab && isTab(tab) && tab !== 'bots') dispatch({ type: 'tab', tab })
+    })
+    // only on first load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const tab = currentTab(stack)
+  useEffect(() => {
+    cloudSet(LAST_TAB, tab)
+  }, [tab])
+
+  // Telegram's back button goes one page back; hidden on tab roots.
   useEffect(() => {
     const back = webApp?.BackButton
     if (!back) return
-    const goHome = () => setRoute({ page: 'bots' })
-    if (route.page === 'bots') back.hide()
-    else back.show()
-    back.onClick(goHome)
-    return () => back.offClick(goHome)
-  }, [route])
+    const goBack = () => dispatch({ type: 'back' })
+    if (stack.length > 1) back.show()
+    else back.hide()
+    back.onClick(goBack)
+    return () => back.offClick(goBack)
+  }, [stack.length])
+
+  // "Settings" in the Mini App's own menu opens the settings tab.
+  useEffect(() => onSettingsButton(() => dispatch({ type: 'tab', tab: 'settings' })), [])
+
+  const route = stack[stack.length - 1]
+  const onTabRoot = stack.length === 1
 
   let content
   if (error) content = <ErrorBox message={error} onRetry={loadMe} />
   else if (!me) content = <Loading />
-  else if (route.page === 'bot') content = <BotPage id={route.id} me={me} navigate={setRoute} />
-  else if (route.page === 'mine') content = <MySettingsPage id={route.id} navigate={setRoute} />
-  else if (route.page === 'new') content = <NewBotPage onDone={() => setRoute({ page: 'bots' })} />
+  else if (route.page === 'bot') content = <BotPage id={route.id} me={me} navigate={navigate} />
+  else if (route.page === 'mine') content = <MySettingsPage id={route.id} navigate={navigate} />
+  else if (route.page === 'new') content = <NewBotPage navigate={navigate} />
   else if (route.page === 'settings') content = <SettingsPage me={me} onChange={setMe} />
+  else if (route.page === 'credits') content = <CreditsPage me={me} onChange={setMe} />
   else if (route.page === 'tasks') content = <TasksPage me={me} />
-  else content = <BotsPage me={me} navigate={setRoute} />
+  else content = <BotsPage me={me} navigate={navigate} />
 
-  return <I18n.Provider value={i18n}>{content}</I18n.Provider>
+  return (
+    <I18n.Provider value={i18n}>
+      <div className={onTabRoot ? 'has-tabbar' : undefined}>{content}</div>
+      <BottomButtonsFallback />
+      {onTabRoot && <TabBar active={tab} onSelect={selectTab} />}
+    </I18n.Provider>
+  )
 }
