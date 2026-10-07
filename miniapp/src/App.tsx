@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { api, type Lang, type Me } from './api'
 import { I18n, translator } from './i18n'
-import { currentTab, initialStack, isTab, reduce, type Route, type Tab } from './nav'
+import { chosenTab, currentTab, initialStack, isTab, reduce, type NavAction, type Route, type Tab } from './nav'
 import { BotPage } from './pages/BotPage'
 import { BotsPage } from './pages/BotsPage'
 import { CreditsPage } from './pages/CreditsPage'
@@ -40,40 +40,36 @@ export default function App() {
     document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr'
   }, [lang])
 
-  // Set once the stored tab was applied or skipped; until then LAST_TAB is not written.
-  const [restored, setRestored] = useState(false)
   // Set when the user navigates before the stored tab arrives; their choice wins.
   const navigated = useRef(false)
 
-  const navigate = useCallback((route: Route) => {
+  // Every navigation by the user: remembers a tab they choose (opening the app, even
+  // through a deep link, chooses nothing), so the next launch reopens on it.
+  const go = useCallback((action: NavAction) => {
     navigated.current = true
-    dispatch({ type: 'push', route })
+    const tab = chosenTab(action)
+    if (tab) cloudSet(LAST_TAB, tab)
+    dispatch(action)
   }, [])
-  const selectTab = useCallback((tab: Tab) => {
-    navigated.current = true
-    selectionHaptic()
-    dispatch({ type: 'tab', tab })
-  }, [])
+  const navigate = useCallback((route: Route) => go({ type: 'push', route }), [go])
+  const selectTab = useCallback(
+    (tab: Tab) => {
+      selectionHaptic()
+      go({ type: 'tab', tab })
+    },
+    [go],
+  )
 
   // Reopen on the tab used last time, unless Telegram opened a specific page.
   useEffect(() => {
-    if (stack.length > 1) {
-      setRestored(true)
-      return
-    }
+    if (stack.length > 1) return
     cloudGet(LAST_TAB).then((tab) => {
-      if (!navigated.current && tab && isTab(tab) && tab !== 'bots') dispatch({ type: 'tab', tab })
-      setRestored(true)
+      if (!navigated.current && tab && isTab(tab)) dispatch({ type: 'tab', tab })
     })
     // only on first load
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const tab = currentTab(stack)
-  // Deep links must not overwrite the remembered tab: write only once the tab differs from the opening one.
-  const openedOn = useRef(tab)
-  useEffect(() => {
-    if (restored && tab !== openedOn.current) cloudSet(LAST_TAB, tab)
-  }, [tab, restored])
 
   // Telegram's back button goes one page back; hidden on tab roots.
   useEffect(() => {
@@ -89,11 +85,8 @@ export default function App() {
   // "Settings" in the Mini App's own menu opens the settings tab.
   useEffect(
     () =>
-      onSettingsButton(() => {
-        navigated.current = true
-        dispatch({ type: 'tab', tab: 'settings' })
-      }),
-    [],
+      onSettingsButton(() => go({ type: 'tab', tab: 'settings' })),
+    [go],
   )
 
   const route = stack[stack.length - 1]

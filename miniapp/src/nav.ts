@@ -35,6 +35,14 @@ export function reduce(stack: Stack, action: NavAction): Stack {
   }
 }
 
+/** The tab a navigation picks (a tab tap, or going to a tab root), or null if it stays on the tab. */
+export function chosenTab(action: NavAction): Tab | null {
+  if (action.type === 'tab') return action.tab
+  if (action.type === 'push' || action.type === 'replace')
+    return isTab(action.route.page) ? action.route.page : null
+  return null
+}
+
 export function currentTab(stack: Stack): Tab {
   return stack[0].page as Tab
 }

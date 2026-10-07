@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { currentTab, initialStack, reduce, type Stack } from '../src/nav.ts'
+import { chosenTab, currentTab, initialStack, reduce, type Stack } from '../src/nav.ts'
 
 const home: Stack = [{ page: 'bots' }]
 
@@ -53,4 +53,12 @@ test('initialStack honours the existing deep links', () => {
   assert.deepEqual(initialStack('?mine=5', undefined), [{ page: 'bots' }, { page: 'mine', id: 5 }])
   assert.deepEqual(initialStack('', 'bot_6'), [{ page: 'bots' }, { page: 'bot', id: 6 }])
   assert.deepEqual(initialStack('?bot=abc', 'nonsense'), home)
+})
+
+test('chosenTab names the tab a navigation picks, so it can be remembered', () => {
+  assert.equal(chosenTab({ type: 'tab', tab: 'bots' }), 'bots')
+  assert.equal(chosenTab({ type: 'push', route: { page: 'credits' } }), 'credits')
+  assert.equal(chosenTab({ type: 'replace', route: { page: 'tasks' } }), 'tasks')
+  assert.equal(chosenTab({ type: 'push', route: { page: 'bot', id: 1 } }), null)
+  assert.equal(chosenTab({ type: 'back' }), null)
 })
