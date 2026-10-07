@@ -4,6 +4,7 @@ import type { Route } from '../nav'
 import { formatNumber, useI18n } from '../i18n'
 import { useLoad } from '../hooks'
 import { confirm, haptic } from '../telegram'
+import { useMainButton } from '../telegramHooks'
 import { ErrorBox, Loading } from '../ui'
 
 export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => void }) {
@@ -11,20 +12,11 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
   const bots = useLoad(() => api.bots(), [])
   const used = useLoad(() => api.usedBots(), [])
   const quota = me.messages_today
+  useMainButton({ text: `＋ ${t('newBot')}`, onClick: () => navigate({ page: 'new' }) })
 
   return (
     <>
-      <div className="row between">
-        <h1>{t('myBots')}</h1>
-        <div className="row">
-          <button className="btn secondary" onClick={() => navigate({ page: 'tasks' })}>
-            {t('myTasks')}
-          </button>
-          <button className="btn secondary" onClick={() => navigate({ page: 'settings' })}>
-            {t('settings')}
-          </button>
-        </div>
-      </div>
+      <h1>{t('myBots')}</h1>
 
       <div className="card hint">
         {t('messagesToday')}: {formatNumber(quota.used, lang)}
@@ -45,10 +37,6 @@ export function BotsPage({ me, navigate }: { me: Me; navigate: (r: Route) => voi
           {bot.description && <div>{bot.description}</div>}
         </button>
       ))}
-
-      <button className="btn block" onClick={() => navigate({ page: 'new' })}>
-        + {t('newBot')}
-      </button>
 
       {used.data && used.data.length > 0 && (
         <>
@@ -76,7 +64,7 @@ function UsedBotItem({
   const [error, setError] = useState<string | null>(null)
 
   const remove = async () => {
-    if (!(await confirm(t('removeUsedConfirm', { username: bot.username })))) return
+    if (!(await confirm(t('removeUsedConfirm', { username: bot.username }), { action: t('removeFromList'), destructive: true }))) return
     try {
       await api.removeUsedBot(bot.id)
       haptic('success')
