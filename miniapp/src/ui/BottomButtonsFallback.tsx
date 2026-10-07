@@ -4,7 +4,7 @@ import { bottomButtons, needsFallback } from '../telegram'
 const subscribe = (listener: () => void) => bottomButtons.subscribe(listener)
 
 /** Draws the bottom buttons in the page when Telegram cannot (a plain browser, old clients). */
-export function BottomButtonsFallback() {
+export function BottomButtonsFallback({ aboveTabbar = false }: { aboveTabbar?: boolean }) {
   const main = useSyncExternalStore(subscribe, () => bottomButtons.get('main'))
   const secondary = useSyncExternalStore(subscribe, () => bottomButtons.get('secondary'))
   const shown = (['secondary', 'main'] as const)
@@ -12,7 +12,7 @@ export function BottomButtonsFallback() {
     .filter(({ slot, options }) => options && needsFallback(slot))
   if (shown.length === 0) return null
   return (
-    <div className="bottom-fallback">
+    <div className={aboveTabbar ? 'bottom-fallback above-tabbar' : 'bottom-fallback'}>
       {shown.map(({ slot, options }) => (
         <button
           key={slot}

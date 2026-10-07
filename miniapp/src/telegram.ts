@@ -16,6 +16,7 @@ interface BottomButton {
   showProgress(leaveActive?: boolean): void
   hideProgress(): void
   onClick(cb: () => void): void
+  offClick(cb: () => void): void
 }
 
 interface PopupButton {
@@ -122,7 +123,7 @@ export function confirm(message: string, opts: { action?: string; destructive?: 
         (id) => resolve(id === 'ok'),
       ),
     )
-  if (insideTelegram) return new Promise((resolve) => webApp!.showConfirm(message, resolve))
+  if (supports('6.2')) return new Promise((resolve) => webApp!.showConfirm(message, resolve))
   return Promise.resolve(window.confirm(message))
 }
 
@@ -239,7 +240,15 @@ export const bottomButtons = createBottomButtons({
   },
 })
 
-for (const slot of ['main', 'secondary'] as const) telegramButton(slot)?.onClick(() => bottomButtons.click(slot))
+const slotHandlers = {
+  main: () => bottomButtons.click('main'),
+  secondary: () => bottomButtons.click('secondary'),
+}
+for (const slot of ['main', 'secondary'] as const) telegramButton(slot)?.onClick(slotHandlers[slot])
+// Vite hot reload re-runs this module; drop the old handlers so clicks are not delivered twice.
+import.meta.hot?.dispose(() => {
+  for (const slot of ['main', 'secondary'] as const) telegramButton(slot)?.offClick(slotHandlers[slot])
+})
 
 /** Whether bottom buttons must be drawn in the page (outside Telegram, or no SecondaryButton). */
 export function needsFallback(slot: Slot): boolean {

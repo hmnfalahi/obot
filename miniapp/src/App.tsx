@@ -9,7 +9,7 @@ import { MySettingsPage } from './pages/MySettingsPage'
 import { NewBotPage } from './pages/NewBotPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TasksPage } from './pages/TasksPage'
-import { cloudGet, cloudSet, onSettingsButton, selectionHaptic, startParam, webApp } from './telegram'
+import { cloudGet, cloudSet, onSettingsButton, selectionHaptic, startParam, supports, webApp } from './telegram'
 import { BottomButtonsFallback, ErrorBox, Loading, TabBar } from './ui'
 
 const LAST_TAB = 'last_tab'
@@ -69,13 +69,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const tab = currentTab(stack)
+  // Deep links must not overwrite the remembered tab: write only once the tab differs from the opening one.
+  const openedOn = useRef(tab)
   useEffect(() => {
-    if (restored) cloudSet(LAST_TAB, tab)
+    if (restored && tab !== openedOn.current) cloudSet(LAST_TAB, tab)
   }, [tab, restored])
 
   // Telegram's back button goes one page back; hidden on tab roots.
   useEffect(() => {
-    const back = webApp?.BackButton
+    const back = supports('6.1') ? webApp?.BackButton : undefined
     if (!back) return
     const goBack = () => dispatch({ type: 'back' })
     if (stack.length > 1) back.show()
@@ -85,7 +87,14 @@ export default function App() {
   }, [stack.length])
 
   // "Settings" in the Mini App's own menu opens the settings tab.
-  useEffect(() => onSettingsButton(() => dispatch({ type: 'tab', tab: 'settings' })), [])
+  useEffect(
+    () =>
+      onSettingsButton(() => {
+        navigated.current = true
+        dispatch({ type: 'tab', tab: 'settings' })
+      }),
+    [],
+  )
 
   const route = stack[stack.length - 1]
   const onTabRoot = stack.length === 1
@@ -104,7 +113,7 @@ export default function App() {
   return (
     <I18n.Provider value={i18n}>
       <div className={onTabRoot ? 'has-tabbar' : undefined}>{content}</div>
-      <BottomButtonsFallback />
+      <BottomButtonsFallback aboveTabbar={onTabRoot} />
       {onTabRoot && <TabBar active={tab} onSelect={selectTab} />}
     </I18n.Provider>
   )

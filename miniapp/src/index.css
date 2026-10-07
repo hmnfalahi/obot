@@ -236,6 +236,13 @@ button {
   background: var(--bg2);
 }
 
+.bottom-fallback.above-tabbar {
+  /* Sit above the fixed tab bar (same 72px the .has-tabbar padding reserves). */
+  bottom: calc(72px + var(--tg-safe-area-inset-bottom, 0px));
+  padding-bottom: 8px;
+  z-index: 11;
+}
+
 .bottom-fallback .btn {
   flex: 1;
 }
@@ -251,7 +258,7 @@ button {
   bottom: 0;
   display: flex;
   justify-content: center;
-  background: var(--bg);
+  background: var(--bg2);
   border-top: 0.5px solid color-mix(in srgb, var(--hint) 30%, transparent);
   padding-bottom: var(--tg-safe-area-inset-bottom, 0px);
   z-index: 10;

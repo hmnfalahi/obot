@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api, TOOLS, type ToolName } from '../api'
 import { useI18n } from '../i18n'
 import type { Route } from '../nav'
-import { haptic, openTelegramLink } from '../telegram'
+import { haptic, openTelegramLink, setClosingGuard } from '../telegram'
 import { useDirtyGuard, useMainButton } from '../telegramHooks'
 
 export function NewBotPage({ navigate }: { navigate: (r: Route) => void }) {
@@ -30,6 +30,7 @@ export function NewBotPage({ navigate }: { navigate: (r: Route) => void }) {
       const { create_link } = await api.newBot(form)
       haptic('success')
       // Telegram's own dialog creates the bot; the factory then applies this draft.
+      setClosingGuard(false)
       openTelegramLink(create_link)
       navigate({ page: 'bots' })
     } catch (e) {
