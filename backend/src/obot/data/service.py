@@ -32,6 +32,7 @@ from obot.data.format import (
 from obot.data.query import Filter, FilterOp, Metric, Period, find_records, summarize
 from obot.data.query import availability as find_taken
 from obot.data.repository import (
+    MAX_ID,
     add_record,
     collection_schema,
     get_collection,
@@ -46,8 +47,6 @@ NoticeShared = Callable[[], Awaitable[None]]
 ConfirmDelete = Callable[[Collection, Record], Awaitable[str]]
 
 log = logging.getLogger(__name__)
-
-MAX_ID = 2**63 - 1
 
 # Postgres: deadlock detected, serialization failure.
 RETRYABLE = {"40P01", "40001"}
@@ -125,13 +124,18 @@ class DataService:
             raise CollectionNotFound(key)
         return await space_for(session, bot, user)
 
-    async def note(self, session: AsyncSession) -> str | None:
-        """The catalog for the bot's instructions; None when it has no collections here."""
-        space = await self._space(session)
-        collections = await list_collections(session, space)
-        if not collections:
+    async def note(self, session: AsyncSession, now: datetime | None = None) -> str | None:
+        """The catalog for the bot's instructions; None when it has no collections here or
+        the catalog cannot be read (a failure never breaks the reply)."""
+        try:
+            space = await self._space(session)
+            collections = await list_collections(session, space)
+            if not collections:
+                return None
+            return describe_collections(collections, space, now or datetime.now(UTC))
+        except Exception:
+            log.exception("data catalog failed")
             return None
-        return describe_collections(collections, space, datetime.now(UTC))
 
     async def _run(self, key: str, action, *, write: bool = False) -> str:
         """Run `action(session, space, c)`, which returns text, or (text, after) where `after`
@@ -150,6 +154,9 @@ class DataService:
             if _sqlstate(e) in RETRYABLE:
                 return "ERROR: someone changed this at the same moment; try again."
             log.exception("data tool database error")
+            return "ERROR: the data could not be read or saved; try again later."
+        except Exception:
+            log.exception("data tool failed")
             return "ERROR: the data could not be read or saved; try again later."
         text, after = result if isinstance(result, tuple) else (result, None)
         if after is not None:

@@ -222,3 +222,26 @@ async def test_raising_confirm_is_reported_as_text(world) -> None:
 async def test_missing_user_is_collection_not_found(world) -> None:
     out = await DataService(world.sessions, world.pricing, world.bot.id, 10**9).find("expenses")
     assert "no collection named 'expenses'" in out
+
+
+async def test_unexpected_failures_become_error_text(world) -> None:
+    from sqlalchemy.exc import TimeoutError as PoolTimeout
+
+    def broken(exc):
+        def factory():
+            raise exc
+
+        return factory
+
+    for exc in (PoolTimeout("pool exhausted"), RuntimeError("boom")):
+        failing = DataService(broken(exc), world.pricing, world.bot.id, world.alice.id)
+        assert (await failing.find("expenses")).startswith("ERROR:")
+        assert (await failing.add("expenses", {"amount": 1})).startswith("ERROR:")
+
+
+async def test_catalog_failure_gives_no_note(world) -> None:
+    class Broken:
+        async def get(self, *args):
+            raise RuntimeError("down")
+
+    assert await service(world, world.alice).note(Broken()) is None

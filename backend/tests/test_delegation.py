@@ -259,3 +259,26 @@ async def test_failing_own_key_is_reported_to_the_asking_bot(session, cipher, re
 
     assert answer.startswith("ERROR") and "own key" in answer and "auth" in answer
     assert sent == []
+
+
+async def test_delegator_passes_data_flag_and_survives_toolkit_failure(
+    session, cipher, monkeypatch
+) -> None:
+    from obot.telegram import toolkit as toolkit_module
+
+    caller = await make_bot(session, cipher, 1, "asst_bot")
+    await make_bot(session, cipher, 2, "fr_bot")
+    await session.commit()
+    seen = {}
+
+    async def failing_toolkit(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("catalog down")
+
+    monkeypatch.setattr(toolkit_module, "toolkit", failing_toolkit)
+    runtime = runtime_with(session, AnsweringModel("x"), cipher)
+    for data in (False, True):
+        delegate = Delegator(runtime, caller, caller.owner, data=data)
+        answer = await delegate("fr_bot", "hi")
+        assert answer.startswith("ERROR:")
+        assert seen["data"] is data and seen["delegation"] is False

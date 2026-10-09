@@ -40,6 +40,8 @@ from obot.data.space import (
 )
 from obot.db.models import Bot, Collection, CollectionScope, Record, RecordKey, User
 
+MAX_ID = 2**63 - 1  # the largest id a record or collection can have
+
 
 def collection_schema(c: Collection) -> CollectionSchema:
     return CollectionSchema.model_validate({"fields": c.schema["fields"], "rules": c.rules})
@@ -321,6 +323,18 @@ async def delete_record(
     record.deleted_at = datetime.now(UTC)
     await session.execute(delete(RecordKey).where(RecordKey.record_id == record.id))
     await session.flush()
+
+
+async def was_deleted(
+    session: AsyncSession, space: DataSpace, c: Collection, record_id: int
+) -> bool:
+    """Whether `record_id` is a soft-deleted record of `c` this space could have read and
+    changed, i.e. whose delete it may be told about."""
+    require_visible(space, c)
+    record = await session.scalar(
+        select(Record).where(Record.id == record_id, *row_filter(space, c, deleted=True))
+    )
+    return record is not None and can_change(space, c, record)
 
 
 async def purge_deleted_records(session: AsyncSession, retention_days: int) -> int:

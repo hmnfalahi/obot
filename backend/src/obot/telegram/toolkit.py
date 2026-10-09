@@ -76,7 +76,7 @@ async def toolkit(
             notice_shared=SharedNotice(runtime, bot, payer),
             confirm_delete=DeleteConfirmer(runtime, bot, payer, owner_timezone=owner.timezone),
         )
-        data_note = await service.note(session)
+        data_note = await service.note(session, now)
         if data_note:
             services.data = service
     return Toolkit(
