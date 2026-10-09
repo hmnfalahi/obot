@@ -13,7 +13,7 @@ from typing import Any, Literal, Protocol
 import feedparser
 import httpx
 import trafilatura
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import RunContext, Tool
 
 from obot.core.custom_api import API_TOOL, Endpoint, MissingKeys, request
@@ -73,14 +73,14 @@ class DataFilter(BaseModel):
 
 
 class FieldSpec(BaseModel):
-    key: str  # lowercase latin slug, e.g. "kg"
-    label: str  # in the user's language
+    key: str = Field(description='lowercase latin slug, e.g. "kg"')
+    label: str = Field(description="in the user's language")
     type: Literal[
         "text", "number", "money", "date", "time", "datetime", "choice", "boolean", "phone"
     ]
     required: bool = False
-    options: list[str] = []  # choice only
-    currency: str | None = None  # money only, e.g. "IRT"
+    options: list[str] = Field(default=[], description="choice only")
+    currency: str | None = Field(default=None, description='money only, e.g. "IRT"')
 
 
 @dataclass

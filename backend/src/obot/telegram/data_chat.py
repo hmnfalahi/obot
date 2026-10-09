@@ -245,7 +245,7 @@ class DefineProposer:
         if client is None:
             return "ERROR: cannot ask the user to confirm right now; try again later."
         token = secrets.token_urlsafe(9)
-        await runtime.redis.set(f"data-define:{token}", d.to_json(), ex=DEFINE_TTL)
+        key = f"data-define:{token}"
         lang = self._lang
         buttons = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -262,6 +262,7 @@ class DefineProposer:
         await runtime.sender.send_text(
             client, self._tg_user_id, definition_text(d, lang), group=False, buttons=buttons
         )
+        await runtime.redis.set(key, d.to_json(), ex=DEFINE_TTL)
         return (
             f"The user was shown the proposed collection {d.key!r} with Save and Cancel "
             "buttons. Tell them in one short sentence to press Save; it does not exist yet."
@@ -300,7 +301,10 @@ async def on_define_button(
         await query.answer(t(lang, "data.not_for_you"), show_alert=True)
         return
     lang = lang_of(user.language)
-    await runtime.redis.delete(key)
+    if not await runtime.redis.delete(key):  # someone else pressed first
+        await query.answer()
+        await _edit(query, t(lang, "data.define_expired"))
+        return
     if action == "no":
         await query.answer()
         await _edit(query, t(lang, "data.define_cancelled"))
@@ -312,6 +316,12 @@ async def on_define_button(
         await query.answer()
         reason = describe_error(e).removeprefix("ERROR: ")
         await _edit(query, t(lang, "data.define_failed", reason=reason))
+        return
+    except Exception:
+        log.exception("could not apply a collection proposal")
+        await session.rollback()
+        await query.answer()
+        await _edit(query, t(lang, "data.define_failed", reason="try again later"))
         return
     await session.commit()
     title = c.title.get(lang) or next(iter(c.title.values()), c.key)
