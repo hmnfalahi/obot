@@ -87,10 +87,12 @@ class DraftReminder(BaseModel):
 class CollectionDraft(BaseModel):
     key: str = Field(description="Lowercase latin slug, e.g. 'appointments'.")
     title: str = Field(description="Shown to people, in the bot's language.")
-    scope: Literal["personal", "shared"] = Field(
+    scope: Literal["personal", "shared", "group"] = Field(
         description=(
             "'personal': each user keeps their own (expenses, habits). 'shared': everyone "
-            "adds and only the owner sees them all (bookings, orders, registrations)."
+            "adds and only the owner sees them all (bookings, orders, registrations). "
+            "'group': one list per Telegram group the bot is in, used by mentioning the bot "
+            "there (family shopping list, team to-dos)."
         )
     )
     fields: list[DraftField]
@@ -105,7 +107,7 @@ class CollectionDraft(BaseModel):
     notify_author_on_change: bool | None = Field(
         default=None,
         description=(
-            "Shared only: tell the person when someone else changes or removes their "
+            "Shared or group only: tell the person when someone else changes or removes their "
             "record. Omit to keep."
         ),
     )

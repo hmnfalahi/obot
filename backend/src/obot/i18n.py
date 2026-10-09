@@ -155,6 +155,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "weekday.6": "Sun",
         "data.scope.personal": "each user keeps their own",
         "data.scope.shared": "everyone adds, only you see them all",
+        "data.scope.group": "one list per group: members add, group admins manage all",
         "data.event.create": "🆕 New in «{title}»:\n{record}",
         "data.event.update": "✏️ Changed in «{title}»:\n{record}",
         "data.event.delete": "🗑 Removed from «{title}»:\n{record}",
@@ -391,6 +392,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "weekday.6": "یکشنبه",
         "data.scope.personal": "هر کاربر برای خودش",
         "data.scope.shared": "همه ثبت می‌کنند، فقط تو همه را می‌بینی",
+        "data.scope.group": (
+            "هر گروه یک لیست: اعضا اضافه می‌کنند، ادمین‌های گروه همه را مدیریت می‌کنند"
+        ),
         "data.event.create": "🆕 مورد تازه در «{title}»:\n{record}",
         "data.event.update": "✏️ تغییر در «{title}»:\n{record}",
         "data.event.delete": "🗑 از «{title}» حذف شد:\n{record}",

@@ -331,3 +331,28 @@ async def test_notify_only_change_leaves_reminders_alone(data_world, monkeypatch
     later = BOOKINGS.model_copy(update={"no_reminder": True})
     await sync_collections(w.session, w.pricing, w.bot, [later], "fa")
     assert calls == [1]
+
+
+async def test_sync_creates_a_group_collection(data_world) -> None:
+    w = data_world
+    draft = CollectionDraft.model_validate(
+        {
+            "key": "shopping",
+            "title": "خرید",
+            "scope": "group",
+            "fields": [{"key": "item", "label": "قلم", "type": "text", "required": True}],
+            "notify_author_on_change": True,
+        }
+    )
+    assert await sync_collections(w.session, w.pricing, w.bot, [draft], "fa") == []
+    [c] = await template_collections(w.session, w.bot.id)
+    assert c.scope == CollectionScope.GROUP
+    assert from_collection(c, "fa").scope == "group"
+    assert {(n.on, n.to) for n in collection_events(c).notify} == {
+        ("update", "author"),
+        ("delete", "author"),
+    }
+
+    told = draft.model_copy(update={"key": "chores", "title": "کارها", "notify_owner": True})
+    [problem] = await sync_collections(w.session, w.pricing, w.bot, [told], "fa")
+    assert problem.reason == "invalid"  # only shared collections message the owner
