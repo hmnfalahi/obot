@@ -11,17 +11,19 @@ import json
 import re
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from obot.data.errors import (
     FieldError,
+    InvalidSchema,
     OutsideAllowedHours,
     RecordInvalid,
     SchemaChangeRejected,
 )
+from obot.db.models import CollectionScope
 
 KEY_PATTERN = r"^[a-z][a-z0-9_]{0,39}$"
 MAX_FIELDS = 30
@@ -382,3 +384,47 @@ def check_evolution(old: CollectionSchema, new: CollectionSchema, *, has_records
         raise SchemaChangeRejected(
             "unique rules cannot be added once a collection has records", change="unique_added"
         )
+
+
+class NotifyRule(BaseModel):
+    on: Literal["create", "update", "delete"]
+    to: Literal["owner", "author"]
+
+
+class RemindRule(BaseModel):
+    # A date field plus a time field, or a datetime field, or a date field alone (09:00).
+    date_field: str
+    time_field: str | None = None
+    before_minutes: int = Field(ge=0, le=30 * 24 * 60)
+    to: Literal["author", "owner"] = "author"
+
+
+class CollectionEvents(BaseModel):
+    notify: list[NotifyRule] = []
+    remind: list[RemindRule] = Field(default=[], max_length=3)
+
+
+def check_events(
+    events: CollectionEvents, schema: CollectionSchema, scope: CollectionScope
+) -> None:
+    """Refuse rules that name missing fields or tell the owner about personal records."""
+    rules = [*events.notify, *events.remind]
+    if scope != CollectionScope.SHARED and any(r.to == "owner" for r in rules):
+        raise InvalidSchema("only shared collections can notify the owner")
+    fields = schema.field_map()
+    for r in events.remind:
+        day = fields.get(r.date_field)
+        if r.time_field is None:
+            ok = day is not None and day.type in (FieldType.DATE, FieldType.DATETIME)
+        else:
+            at = fields.get(r.time_field)
+            ok = (
+                day is not None
+                and day.type == FieldType.DATE
+                and at is not None
+                and at.type == FieldType.TIME
+            )
+        if not ok:
+            raise InvalidSchema(
+                "a reminder needs a date or datetime field, or a date and a time field"
+            )
