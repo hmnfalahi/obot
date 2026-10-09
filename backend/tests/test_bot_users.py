@@ -229,3 +229,73 @@ async def test_a_broken_model_choice_still_gets_an_answer(session, cipher, monke
     await bots_module._respond(inbound, "hi", None, None, session, record, ali, runtime)
 
     assert "something went wrong" in runtime.sender.send_text.await_args.args[2]
+
+
+async def test_group_replies_get_the_groups_data_space(session, cipher, redis, monkeypatch) -> None:
+    from obot.data.service import GroupChat
+    from obot.telegram.group_access import CachedGroupAdmin
+
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, "fa")
+    runtime = SimpleNamespace(redis=redis, sender=AsyncMock())
+    inbound = bots_module.Inbound(
+        client=AsyncMock(id=BOT_ID),
+        chat_id=GROUP.id,
+        message_id=10,
+        sender_name="Ali",
+        sender_language="fa",
+        group=True,
+        chat_title="G",
+    )
+    group = bots_module.group_chat_for(inbound, record, ali, runtime)
+    assert isinstance(group, GroupChat)
+    assert (group.tg_chat_id, group.title) == (GROUP.id, "G")
+    assert isinstance(group.is_admin, CachedGroupAdmin)
+
+    private = bots_module.Inbound(
+        client=AsyncMock(id=BOT_ID),
+        chat_id=ALI.id,
+        message_id=10,
+        sender_name="Ali",
+        sender_language="fa",
+        group=False,
+    )
+    assert bots_module.group_chat_for(private, record, ali, runtime) is None
+
+
+async def test_respond_passes_the_group_to_the_toolkit(session, cipher, redis, monkeypatch) -> None:
+    from obot.chat.history import ChatScope
+
+    record = await bot_record(session, cipher)
+    ali, _ = await join_bot(session, record, ALI.id, "fa")
+    seen = {}
+
+    async def fake_toolkit(*args, **kwargs):
+        seen.update(kwargs)
+        raise RuntimeError("stop here")
+
+    chosen = SimpleNamespace(model=None, byok=False, downgraded=False)
+    monkeypatch.setattr(bots_module, "reply_model", AsyncMock(return_value=chosen))
+    monkeypatch.setattr(
+        bots_module, "check_llm_quota", AsyncMock(return_value=SimpleNamespace(allowed=True))
+    )
+    monkeypatch.setattr(bots_module, "recent_messages", AsyncMock(return_value=[]))
+    monkeypatch.setattr(bots_module, "toolkit", fake_toolkit)
+    runtime = SimpleNamespace(
+        redis=redis, sender=AsyncMock(), models=None, cipher=None, pricing=None, history_limit=5
+    )
+    inbound = bots_module.Inbound(
+        client=AsyncMock(id=BOT_ID),
+        chat_id=GROUP.id,
+        message_id=10,
+        sender_name="Ali",
+        sender_language="fa",
+        group=True,
+        chat_title="G",
+    )
+    incoming = SimpleNamespace(id=1)
+    await bots_module._respond(
+        inbound, "hi", incoming, ChatScope(record.id, GROUP.id), session, record, ali, runtime
+    )
+    assert seen["group"].tg_chat_id == GROUP.id
+    assert seen["data"] is True and seen["interactive"] is False

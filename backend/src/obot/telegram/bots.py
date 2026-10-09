@@ -19,6 +19,7 @@ from obot.chat.history import ChatScope, recent_messages, record_message
 from obot.chat.membership import upsert_membership
 from obot.core.agent import BotProfile, Turn, generate_reply
 from obot.core.byok import failure_of
+from obot.data.service import GroupChat
 from obot.db.models import Bot as BotRecord
 from obot.db.models import Message as StoredMessage
 from obot.db.models import SenderKind, User
@@ -28,6 +29,7 @@ from obot.memory.store import MEMORY_TOOL, forget_chat
 from obot.notices import first_today
 from obot.telegram.addressing import is_addressed, strip_mention
 from obot.telegram.api_keys import KeyRequester
+from obot.telegram.group_access import CachedGroupAdmin
 from obot.telegram.moderation import report_from_bot
 from obot.telegram.runtime import Runtime
 from obot.telegram.scheduling import Scheduler
@@ -251,6 +253,7 @@ class Inbound:
     sender_name: str
     sender_language: str | None
     group: bool
+    chat_title: str | None = None
 
     @classmethod
     def of(cls, message: Message) -> "Inbound":
@@ -261,7 +264,21 @@ class Inbound:
             sender_name=message.from_user.full_name,
             sender_language=message.from_user.language_code,
             group=message.chat.type in GROUP_TYPES,
+            chat_title=message.chat.title,
         )
+
+
+def group_chat_for(
+    inbound: Inbound, bot_record: BotRecord, payer: User, runtime: Runtime
+) -> GroupChat | None:
+    """In a group, the data tools work on that group's records; whether the payer manages
+    the group is asked of Telegram only when an edit or delete needs it."""
+    if not inbound.group:
+        return None
+    is_admin = CachedGroupAdmin(
+        runtime.redis, inbound.client, bot_record.id, inbound.chat_id, payer.tg_user_id
+    )
+    return GroupChat(inbound.chat_id, is_admin, title=inbound.chat_title)
 
 
 async def _respond(
@@ -337,9 +354,10 @@ async def _respond(
             payer,
             schedule=schedule,
             ask_for_keys=ask_for_keys,
-            # Group data comes later (SPEC 8.8, P5-7); personal data never reaches a group.
-            data=not group,
+            # In a group only that group's collections (SPEC 8.8); personal data never.
+            data=True,
             interactive=not group,
+            group=group_chat_for(inbound, bot_record, payer, runtime),
         )
         reply = await generate_reply(
             chosen.model,

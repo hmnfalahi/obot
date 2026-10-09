@@ -74,7 +74,7 @@ async def test_data_tools_need_a_data_service() -> None:
     assert (await data_add(ctx, "expenses", {"amount": 1})).startswith("ERROR:")
 
 
-async def test_toolkit_adds_data_tools_and_catalog_in_private_only(data_world) -> None:
+async def test_toolkit_adds_data_tools_and_catalog_unless_data_is_off(data_world) -> None:
     w = data_world
     runtime = runtime_for(w)
     empty = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
@@ -716,3 +716,44 @@ async def test_forged_group_buttons_get_a_plain_answer(data_world, monkeypatch) 
     roles(monkeypatch, {})
     for forged in ("data:del:1:1:100", "data:del:1:1:-", "data:del:1:1:-x", "data:del:1:1:-1:2"):
         assert not alerted(await press(w, runtime, forged, ALICE))
+
+
+async def test_toolkit_in_a_group_uses_only_the_groups_collections(data_world, monkeypatch) -> None:
+    from obot.telegram import toolkit as toolkit_module
+
+    w = data_world
+    runtime = runtime_for(w)
+    await expenses(w)
+    await shopping(w)
+    peer = SimpleNamespace(username="peer", display_name="Peer", persona=None)
+    monkeypatch.setattr(toolkit_module, "user_bots", AsyncMock(return_value=[peer]))
+    seen = {}
+
+    class Spy:
+        def __init__(self, runtime, bot, payer, **kwargs) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(toolkit_module, "Delegator", Spy)
+    group = GroupChat(-100, AsyncMock(return_value=False), title="Family")
+
+    kit = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice, group=group)
+
+    assert set(DATA_TOOLS) <= {t.name for t in kit.tools}
+    assert DEFINE_TOOL not in {t.name for t in kit.tools}
+    assert "shopping" in kit.note and "expenses" not in kit.note
+    assert seen == {"data": False}  # ask_bot from a group gets no data
+    assert "milk" not in await kit.services.data.find("shopping")
+    await kit.services.data.add("shopping", {"item": "milk"})
+    async with runtime.sessionmaker() as s:
+        space = await w.space(w.alice, tg_chat_id=-100)
+        c = await get_collection(s, space, "shopping")
+        assert [r.data["item"] for r in await find_records(s, space, c)] == ["milk"]
+
+
+async def test_private_toolkit_names_group_lists_without_tools_for_them(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    await shopping(w)
+    kit = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    assert "Shopping" in kit.note and "group" in kit.note
+    assert not {t.name for t in kit.tools} & set(DATA_TOOLS)
