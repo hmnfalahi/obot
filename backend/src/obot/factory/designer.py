@@ -182,7 +182,12 @@ allowed_hours when bookings are only possible at certain times (weekdays 0 = Mon
 5 = Saturday, 6 = Sunday). 'personal' collections give each user their own records
 (expense book, habit tracker). If users should invent their own lists in chat, add the
 personal_data tool instead. Keys are lowercase latin slugs; titles and labels are in the
-bot's language. Collections cannot notify or remind anyone yet: never promise that. When
+bot's language. Collections can message people, with fixed texts and at no cost: set
+notify_owner on a shared collection when the owner wants to hear about each new record
+(bookings, orders), notify_author_on_change when people should hear about changes to their
+record, and a reminder (date field, optional time field, minutes before) when people should
+be reminded before their booking. Only shared collections can message the owner. Omit a
+switch to keep its current value. When
 changing an existing bot, keep its collections and their keys unless the user asks
 otherwise; leaving one out never deletes its data.
 

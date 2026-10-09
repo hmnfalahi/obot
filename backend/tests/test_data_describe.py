@@ -1,5 +1,5 @@
-from obot.data.describe import collection_text, field_text, label_of, rules_text
-from obot.data.schema import CollectionSchema
+from obot.data.describe import collection_text, events_text, field_text, label_of, rules_text
+from obot.data.schema import CollectionEvents, CollectionSchema
 from obot.db.models import CollectionScope
 
 BOOKINGS = CollectionSchema.model_validate(
@@ -80,3 +80,22 @@ def test_only_runs_of_three_or_more_days_become_ranges() -> None:
     )
     assert rules_text(schema, "en") == ["Mon, Wed, Fri, Sat 16:00–20:00"]
     assert rules_text(schema, "fa") == ["شنبه، دوشنبه، چهارشنبه، جمعه ۱۶:۰۰ تا ۲۰:۰۰"]
+
+
+def test_events_in_plain_words() -> None:
+    events = CollectionEvents.model_validate(
+        {
+            "notify": [{"on": "create", "to": "owner"}, {"on": "update", "to": "author"}],
+            "remind": [{"date_field": "date", "time_field": "time", "before_minutes": 1440}],
+        }
+    )
+    assert events_text(events, BOOKINGS, "fa") == [
+        "با هر مورد تازه به تو خبر می‌دهم",
+        "اگر چیزی را تغییر دهی یا حذف کنی، به ثبت‌کننده خبر می‌دهم",
+        "۱ روز قبل از تاریخ یادآوری می‌کنم",
+    ]
+    assert events_text(events, BOOKINGS, "en")[2] == "I remind them 1 day before Date"
+    two = events.model_copy(
+        update={"remind": [events.remind[0].model_copy(update={"before_minutes": 2880})]}
+    )
+    assert events_text(two, BOOKINGS, "en")[2] == "I remind them 2 days before Date"

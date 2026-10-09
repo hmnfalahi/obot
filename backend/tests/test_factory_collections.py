@@ -4,15 +4,19 @@ import pytest
 from sqlalchemy import func, select
 
 from obot.data.errors import DuplicateRecord, InvalidSchema
+from obot.data.events import collection_events
 from obot.data.repository import add_record, template_collections
 from obot.data.repository import collection_schema as schema_of
+from obot.data.schema import CollectionEvents
 from obot.db.models import CollectionScope, RecordKey
 from obot.factory.collections import (
     CollectionDraft,
+    DraftReminder,
     DraftWindow,
     Problem,
     from_collection,
     sync_collections,
+    to_events,
     to_schema,
 )
 
@@ -240,3 +244,48 @@ async def test_resync_with_new_windows_replaces_the_old_ones(data_world) -> None
     assert await sync_collections(w.session, w.pricing, w.bot, [moved], "fa") == []
     [window] = schema_of(c).rules.allowed_hours.windows
     assert (window.weekdays, f"{window.start:%H:%M}") == ([5], "10:00")
+
+
+def test_to_events_keeps_what_the_draft_leaves_out() -> None:
+    current = CollectionEvents.model_validate(
+        {
+            "notify": [{"on": "create", "to": "owner"}],
+            "remind": [{"date_field": "date", "time_field": "time", "before_minutes": 1440}],
+        }
+    )
+    unchanged = to_events(BOOKINGS, current)
+    assert unchanged == current
+
+    off = BOOKINGS.model_copy(update={"notify_owner": False, "no_reminder": True})
+    assert to_events(off, current) == CollectionEvents()
+
+    on = BOOKINGS.model_copy(
+        update={
+            "notify_author_on_change": True,
+            "reminder": DraftReminder(date_field="date", time_field="time", before_minutes=60),
+        }
+    )
+    events = to_events(on, CollectionEvents())
+    assert {(n.on, n.to) for n in events.notify} == {("update", "author"), ("delete", "author")}
+    assert events.remind[0].before_minutes == 60
+
+
+async def test_sync_stores_events_and_reports_bad_ones(data_world) -> None:
+    w = data_world
+    draft = BOOKINGS.model_copy(
+        update={
+            "notify_owner": True,
+            "reminder": DraftReminder(date_field="date", time_field="time", before_minutes=1440),
+        }
+    )
+    assert await sync_collections(w.session, w.pricing, w.bot, [draft], "fa") == []
+    [c] = await template_collections(w.session, w.bot.id)
+    events = collection_events(c)
+    assert [(n.on, n.to) for n in events.notify] == [("create", "owner")]
+    assert from_collection(c, "fa").notify_owner is True
+
+    personal = BOOKINGS.model_copy(
+        update={"key": "notes", "title": "یادداشت", "scope": "personal", "notify_owner": True}
+    )
+    [problem] = await sync_collections(w.session, w.pricing, w.bot, [personal], "fa")
+    assert problem.reason == "invalid"
