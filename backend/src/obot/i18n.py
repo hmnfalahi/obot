@@ -37,6 +37,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.edit": "📝 Changes to @{username}",
         "card.tools": "Tools",
         "card.data": "Data",
+        "card.fixing": "{title} (needs fixing)",
+        "factory.dropped": (
+            "⚠️ I couldn't design these lists correctly: {names}. Describe them again."
+        ),
+        "factory.problem.limit": "you've reached your plan's limit of lists",
+        "factory.problem.kind_change": (
+            "a list can't switch between personal and shared; make a new one"
+        ),
+        "factory.problem.breaks_records": "it doesn't fit the data already saved ({detail})",
+        "factory.problem.invalid": "its design is not valid ({detail})",
+        "factory.problem.failed": "it could not be saved; try again",
         "factory.data_problems": "⚠️ Some lists were not changed:\n{problems}",
         "card.hint": "Send a message to change anything.",
         "btn.create": "✅ Create bot",
@@ -217,6 +228,15 @@ MESSAGES: dict[str, dict[str, str]] = {
         "card.edit": "📝 تغییرات @{username}",
         "card.tools": "ابزارها",
         "card.data": "داده‌ها",
+        "card.fixing": "{title} (نیاز به اصلاح)",
+        "factory.dropped": (
+            "⚠️ نتوانستم این فهرست‌ها را درست طراحی کنم: {names}. دوباره توضیحشان بده."
+        ),
+        "factory.problem.limit": "به سقف تعداد فهرست‌های پلنت رسیده‌ای",
+        "factory.problem.kind_change": "نوع فهرست (شخصی/مشترک) عوض نمی‌شود؛ یک فهرست تازه بساز",
+        "factory.problem.breaks_records": "با داده‌هایی که الان ثبت شده جور نیست ({detail})",
+        "factory.problem.invalid": "طرحش درست نیست ({detail})",
+        "factory.problem.failed": "ذخیره نشد؛ دوباره امتحان کن",
         "factory.data_problems": "⚠️ این فهرست‌ها تغییر نکردند:\n{problems}",
         "card.hint": "برای تغییر هر چیزی پیام بده.",
         "btn.create": "✅ ساخت ربات",

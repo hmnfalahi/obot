@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from obot.billing.plans import Pricing
@@ -221,3 +223,71 @@ async def test_applying_a_draft_creates_its_collections(session, cipher) -> None
     assert c.key == "appointments"
     [existing] = await existing_bot_drafts(session, bot.owner)
     assert existing.draft.collections[0].key == "appointments"
+
+
+def _reply_with(*drafts: BotDraft) -> FunctionModel:
+    """A model that answers each request with the next draft (the last one repeats)."""
+    calls = iter(range(100))
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        draft = drafts[min(next(calls), len(drafts) - 1)]
+        args = {"action": "draft", "draft": draft.model_dump(mode="json"), "reply": "ok"}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    return FunctionModel(respond)
+
+
+BROKEN = BOOKINGS.model_copy(update={"unique": [["phone"]]})
+
+
+async def test_design_drops_collections_that_stay_invalid() -> None:
+    bad = DRAFT.model_copy(
+        update={"collections": [BROKEN, BOOKINGS.model_copy(update={"key": "b"})]}
+    )
+
+    result = await design(_reply_with(bad), "x")
+
+    assert [c.key for c in result.output.draft.collections] == ["b"]
+    assert result.output.dropped_collections == ["appointments"]
+
+
+async def test_design_keeps_the_fixed_collection_after_a_retry() -> None:
+    bad = DRAFT.model_copy(update={"collections": [BROKEN]})
+
+    result = await design(_reply_with(bad, DENTIST), "x")
+
+    assert [c.key for c in result.output.draft.collections] == ["appointments"]
+    assert result.output.dropped_collections == []
+
+
+def test_duplicate_key_retry_names_the_key() -> None:
+    twice = DesignerOutput(
+        action="draft",
+        draft=DRAFT.model_copy(update={"collections": [BOOKINGS, BOOKINGS]}),
+        reply="ok",
+    )
+    with pytest.raises(ModelRetry, match="appointments"):
+        check_output(twice)
+
+
+async def test_card_survives_and_escapes_collections(session) -> None:
+    evil = BOOKINGS.model_copy(
+        update={
+            "title": "<b>x</b>",
+            "fields": [
+                BOOKINGS.fields[0].model_copy(update={"label": "<i>n</i>"}),
+                *BOOKINGS.fields[1:],
+            ],
+        }
+    )
+    broken = BROKEN.model_copy(update={"title": "<u>bad</u>"})
+    owner = await get_or_create_user(session, 1001)
+    row = await start_draft(
+        session, owner, DRAFT.model_copy(update={"collections": [evil, broken]}), last_reply=None
+    )
+
+    card = render_card("en", row, target_username=None)
+
+    assert "<b>x</b>" not in card and "&lt;b&gt;x&lt;/b&gt;" in card
+    assert "<i>n</i>" not in card
+    assert "&lt;u&gt;bad&lt;/u&gt;" in card and "needs fixing" in card

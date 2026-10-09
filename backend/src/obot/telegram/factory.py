@@ -44,7 +44,7 @@ from obot.db.models import (
     FactoryDraft,
     User,
 )
-from obot.factory.collections import to_schema
+from obot.factory.collections import Problem, to_schema
 from obot.factory.designer import BotDraft, design
 from obot.factory.drafts import (
     apply_draft,
@@ -91,7 +91,9 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
             try:
                 schema = to_schema(c, draft.language)
             except InvalidSchema:
-                continue  # the designer's validator makes this rare; never break the card
+                # The designer's validator makes this rare; never break the card.
+                lines.append(f"• {html.escape(t(lang, 'card.fixing', title=c.title))}")
+                continue
             lines.append(
                 html.escape(collection_text(c.title, CollectionScope(c.scope), schema, lang))
             )
@@ -99,8 +101,12 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
     return "\n".join(lines)
 
 
-def _data_problems(lang: str, problems: list[str]) -> str:
-    listed = "\n".join(f"• {html.escape(p)}" for p in problems)
+def _data_problems(lang: str, problems: list[Problem]) -> str:
+    listed = "\n".join(
+        f"• {html.escape(p.title)}: "
+        + html.escape(t(lang, f"factory.problem.{p.reason}", detail=p.detail or ""))
+        for p in problems
+    )
     return t(lang, "factory.data_problems", problems=listed)
 
 
@@ -287,6 +293,9 @@ async def on_text(message: Message, session: AsyncSession, runtime: Runtime) -> 
     target_bot = await session.get(BotRecord, row.bot_id) if row.kind == DraftKind.EDIT else None
 
     await message.answer(reply)
+    if output.dropped_collections:
+        names = ", ".join(output.dropped_collections)
+        await message.answer(t(lang, "factory.dropped", names=names))
     await message.answer(
         render_card(lang, row, target_bot.username if target_bot else None),
         parse_mode=ParseMode.HTML,
@@ -461,7 +470,7 @@ async def on_managed_bot(
     log.info("managed bot @%s: %s", update.bot_user.username, result.outcome)
 
     created_draft = None
-    problems: list[str] = []
+    problems: list[Problem] = []
     if result.outcome == RegisterOutcome.CREATED:
         if row := await take_awaiting_draft(session, owner):
             created_draft = draft_of(row)
