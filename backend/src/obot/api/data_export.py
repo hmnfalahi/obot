@@ -49,6 +49,11 @@ def read_token(secret: str, token: str, now: datetime) -> tuple[int, int, int] |
     return bot_id, collection_id, user_id
 
 
+def _safe(text: str) -> str:
+    """Text a spreadsheet would run as a formula, quoted so it stays text."""
+    return "'" + text if text.startswith(_FORMULA_STARTS) else text
+
+
 def _cell(field_type: FieldType, value, tz: ZoneInfo) -> str:
     if value is None:
         return ""
@@ -61,9 +66,10 @@ def _cell(field_type: FieldType, value, tz: ZoneInfo) -> str:
     if isinstance(value, bool):
         return "1" if value else "0"
     text = str(value)
-    if field_type not in NUMERIC_TYPES and text.startswith(_FORMULA_STARTS):
-        return "'" + text  # a spreadsheet would run this as a formula
-    return text
+    # Numbers and phone numbers ("+98...", "-5") are kept as they are.
+    if field_type in NUMERIC_TYPES or field_type == FieldType.PHONE:
+        return text
+    return _safe(text)
 
 
 async def build_csv(session: AsyncSession, space: DataSpace, c: Collection, lang: str) -> str:
@@ -73,15 +79,15 @@ async def build_csv(session: AsyncSession, space: DataSpace, c: Collection, lang
     out = io.StringIO()
     out.write("﻿")
     writer = csv.writer(out)
-    writer.writerow([label_of(f.label, lang, f.key) for f in fields])
-    offset = 0
+    writer.writerow([_safe(label_of(f.label, lang, f.key)) for f in fields])
+    after_id = None
     while True:
         rows = await find_records(
-            session, space, c, descending=False, limit=MAX_FIND, offset=offset
+            session, space, c, descending=False, limit=MAX_FIND, after_id=after_id
         )
         for r in rows:
             writer.writerow([_cell(f.type, r.data.get(f.key), tz) for f in fields])
         if len(rows) < MAX_FIND:
             break
-        offset += MAX_FIND
+        after_id = rows[-1].id
     return out.getvalue()

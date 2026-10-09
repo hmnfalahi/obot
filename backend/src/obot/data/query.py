@@ -131,9 +131,14 @@ async def find_records(
     limit: int = 20,
     search: str | None = None,
     offset: int = 0,
+    after_id: int | None = None,
 ) -> list[Record]:
-    """Records of `c` the space may read, newest first unless sorted by a field."""
+    """Records of `c` the space may read, newest first unless sorted by a field.
+    `after_id` (unsorted only) continues past that record id in the chosen direction, for
+    reading a whole collection page by page."""
     require_visible(space, c)
+    if after_id is not None and sort is not None:
+        raise InvalidQuery("after_id works without a sort only")
     schema = collection_schema(c)
     tz = tz_for(space, c)
     query = select(Record).where(
@@ -149,6 +154,8 @@ async def find_records(
         ]
         # A collection with nothing to search in matches nothing.
         query = query.where(or_(*columns) if columns else false())
+    if after_id is not None:
+        query = query.where(Record.id < after_id if descending else Record.id > after_id)
     if sort is not None:
         key = _typed(_field(schema, sort))
         query = query.order_by(

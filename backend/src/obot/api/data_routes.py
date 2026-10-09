@@ -5,11 +5,16 @@ back as {code, message, errors, fields} so the app can explain them in the user'
 """
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import joinedload
 
 from obot.api.data_export import build_csv, make_token, read_token
@@ -28,7 +33,7 @@ from obot.data.errors import (
     SchemaChangeRejected,
     StaleRecord,
 )
-from obot.data.query import find_records
+from obot.data.query import MAX_FIND, find_records
 from obot.data.repository import (
     add_record,
     collection_by_id,
@@ -41,14 +46,16 @@ from obot.data.repository import (
     update_record,
 )
 from obot.data.schema import CollectionEvents, CollectionSchema
-from obot.data.service import parse_filters
+from obot.data.service import RETRYABLE, parse_filters
 from obot.data.space import DataSpace, space_for, tz_for
 from obot.db.models import Bot, BotStatus, Collection, Record, User
 from obot.i18n import lang_of
 
 router = APIRouter(prefix="/api")
 
-PAGE_MAX = 100
+PAGE_MAX = MAX_FIND - 1  # a page asks for one more record to tell whether more follow
+MAX_SEARCH = 200
+MAX_FILTERS = 10
 CollectionId = Annotated[int, Path(ge=1, le=2**63 - 1)]
 RecordId = Annotated[int, Path(ge=1, le=2**63 - 1)]
 
@@ -59,6 +66,7 @@ class CollectionOut(BaseModel):
     title: dict[str, str]
     scope: str
     mine: bool  # a personal collection this user made in chat
+    is_owner: bool  # the caller owns the bot, so sees everyone's records of a shared one
     can_edit: bool
     schema_version: int
     fields: list[dict[str, Any]]
@@ -112,6 +120,37 @@ def data_error(e: DataError) -> HTTPException:
     return HTTPException(status, detail)
 
 
+_DATA_PATH = re.compile(r"^/api/(bots/[^/]+/collections(/|$)|exports/)")
+
+
+def _is_data_path(request: Request) -> bool:
+    return bool(_DATA_PATH.match(request.url.path))
+
+
+async def validation_error(request: Request, exc: RequestValidationError) -> Response:
+    """A malformed body or query on the data routes, in the same {code, ...} shape as
+    every other data error; other routes keep FastAPI's default."""
+    if not _is_data_path(request):
+        return await request_validation_exception_handler(request, exc)
+    errors = []
+    for err in exc.errors():
+        loc = [str(part) for part in err.get("loc", ())]
+        if loc and loc[0] in ("body", "query", "path"):
+            loc = loc[1:]
+        errors.append({"field": ".".join(loc), "reason": str(err.get("msg", ""))})
+    detail = {"code": "invalid", "message": "invalid request", "errors": errors, "fields": []}
+    return JSONResponse({"detail": detail}, status_code=422)
+
+
+async def database_error(request: Request, exc: DBAPIError) -> Response:
+    """A deadlock or serialization failure on the data routes: try again (409 busy)."""
+    sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+    if not _is_data_path(request) or sqlstate not in RETRYABLE:
+        raise exc
+    detail = {"code": "busy", "message": "changed at the same moment", "errors": [], "fields": []}
+    return JSONResponse({"detail": detail}, status_code=409)
+
+
 def can_edit(c: Collection, bot: Bot, user: User) -> bool:
     if c.created_by_user_id is None:
         return bot.owner_id == user.id
@@ -134,16 +173,19 @@ def record_out(c: Collection, r: Record, user: User) -> RecordOut:
 
 
 def collection_out(c: Collection, bot: Bot, user: User, space: DataSpace) -> CollectionOut:
+    editor = can_edit(c, bot, user)
+    schema = collection_schema(c).model_dump(mode="json")
     return CollectionOut(
         id=c.id,
         key=c.key,
         title=c.title,
         scope=c.scope.value,
         mine=c.created_by_user_id == user.id,
-        can_edit=can_edit(c, bot, user),
+        is_owner=space.is_owner,
+        can_edit=editor,
         schema_version=c.schema_version,
-        fields=[f for f in c.schema["fields"] if can_edit(c, bot, user) or not f.get("hidden")],
-        rules=c.rules,
+        fields=[f for f in schema["fields"] if editor or not f["hidden"]],
+        rules=schema["rules"],
         events=c.events or {},
         timezone=tz_for(space, c).key,
     )
@@ -182,8 +224,12 @@ async def list_records(
 ) -> RecordsPage:
     space, c = await _space_and_collection(session, bot, user, collection_id)
     try:
+        if q is not None and len(q) > MAX_SEARCH:
+            raise InvalidQuery(f"search is at most {MAX_SEARCH} characters")
         raw = json.loads(filters) if filters else None
         parsed = parse_filters(raw)
+        if len(parsed) > MAX_FILTERS:
+            raise InvalidQuery(f"at most {MAX_FILTERS} filters")
         rows = await find_records(
             session,
             space,

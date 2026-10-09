@@ -1,13 +1,18 @@
+import json
 from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
 
+from asyncpg.exceptions import DeadlockDetectedError
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import joinedload
 
+from obot.api import data_routes
 from obot.api.data_export import make_token, read_token
-from obot.data.repository import create_collection
+from obot.data.query import MAX_FIND
+from obot.data.repository import add_record, collection_by_id, create_collection
 from obot.data.schema import CollectionSchema
-from obot.db.models import Bot, BotStatus, BotVisibility, CollectionScope, User
+from obot.data.space import space_for
+from obot.db.models import Bot, BotStatus, BotVisibility, CollectionScope, RecordEvent, User
 from tests.test_api import ALICE, BOB, TOKEN, auth, make_bot
 
 BOOKINGS = CollectionSchema.model_validate(
@@ -57,6 +62,9 @@ async def test_collections_list_for_owner_and_user(api) -> None:
     assert [c["key"] for c in owner] == ["bookings"]
     assert owner[0]["can_edit"] is True and user[0]["can_edit"] is False
     assert owner[0]["scope"] == "shared" and owner[0]["timezone"]
+    assert owner[0]["is_owner"] is True and user[0]["is_owner"] is False
+    assert owner[0]["rules"]["unique"] == [["date", "time"]]
+    assert owner[0]["fields"][0]["required"] is True and owner[0]["fields"][1]["options"] == []
     assert [f["key"] for f in owner[0]["fields"]][:3] == ["name", "date", "time"]
 
 
@@ -203,6 +211,117 @@ async def test_offset_paging_and_bound(api) -> None:
     assert page["has_more"] is False
     too_far = await api.get(records_url(bot_id, cid) + "?offset=100001", headers=auth(ALICE))
     assert too_far.status_code == 422
+
+
+async def test_has_more_at_the_largest_page(api) -> None:
+    bot_id, cid = await setup(api)
+    async with api.state.sessionmaker() as session:
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        space = await space_for(session, bot, bot.owner)
+        c = await collection_by_id(session, space, cid)
+        for i in range(MAX_FIND + 1):
+            data = {"name": f"N{i}", "date": "2030-01-10", "time": f"{i // 60:02}:{i % 60:02}"}
+            await add_record(session, api.state.pricing, space, c, data)
+        await session.commit()
+    url = records_url(bot_id, cid) + f"?limit={data_routes.PAGE_MAX}"
+    page = (await api.get(url, headers=auth(ALICE))).json()
+    assert len(page["records"]) == data_routes.PAGE_MAX and page["has_more"] is True
+    last = await api.get(url + f"&offset={data_routes.PAGE_MAX}", headers=auth(ALICE))
+    assert len(last.json()["records"]) == MAX_FIND + 1 - data_routes.PAGE_MAX
+    assert last.json()["has_more"] is False
+    too_big = await api.get(
+        records_url(bot_id, cid) + f"?limit={data_routes.PAGE_MAX + 1}", headers=auth(ALICE)
+    )
+    assert too_big.status_code == 422
+
+
+async def test_csv_export_reads_past_one_batch(api) -> None:
+    bot_id, cid = await setup(api)
+    async with api.state.sessionmaker() as session:
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        space = await space_for(session, bot, bot.owner)
+        c = await collection_by_id(session, space, cid)
+        for i in range(MAX_FIND + 5):
+            data = {"name": f"N{i}", "date": "2030-01-10", "time": f"{i // 60:02}:{i % 60:02}"}
+            await add_record(session, api.state.pricing, space, c, data)
+        await session.commit()
+    link = await api.post(f"/api/bots/{bot_id}/collections/{cid}/export", headers=auth(ALICE))
+    lines = (await api.get(link.json()["url"])).content.decode("utf-8").splitlines()
+    names = [line.split(",")[0] for line in lines[1:]]
+    assert names == [f"N{i}" for i in range(MAX_FIND + 5)]
+
+
+async def test_search_and_filter_caps(api) -> None:
+    bot_id, cid = await setup(api)
+    long_q = await api.get(records_url(bot_id, cid) + "?q=" + "a" * 201, headers=auth(ALICE))
+    ok_q = await api.get(records_url(bot_id, cid) + "?q=" + "a" * 200, headers=auth(ALICE))
+    many = json.dumps([{"field": "name", "op": "eq", "value": "x"}] * 11)
+    too_many = await api.get(
+        records_url(bot_id, cid), params={"filters": many}, headers=auth(ALICE)
+    )
+    assert long_q.status_code == 422 and long_q.json()["detail"]["code"] == "invalid_query"
+    assert ok_q.status_code == 200
+    assert too_many.status_code == 422 and too_many.json()["detail"]["code"] == "invalid_query"
+
+
+async def test_malformed_requests_are_structured(api) -> None:
+    bot_id, cid = await setup(api)
+    no_data = await api.post(records_url(bot_id, cid), json={"nope": 1}, headers=auth(ALICE))
+    bad_limit = await api.get(records_url(bot_id, cid) + "?limit=x", headers=auth(ALICE))
+    for r, field in ((no_data, "data"), (bad_limit, "limit")):
+        assert r.status_code == 422
+        detail = r.json()["detail"]
+        assert detail["code"] == "invalid" and detail["fields"] == []
+        assert [e["field"] for e in detail["errors"]] == [field] and detail["errors"][0]["reason"]
+    # Other routes keep FastAPI's own shape.
+    other = await api.patch("/api/me", json={"language": 5}, headers=auth(ALICE))
+    assert other.status_code == 422 and isinstance(other.json()["detail"], list)
+
+
+async def test_deadlock_on_a_data_route_is_busy(api, monkeypatch) -> None:
+    bot_id, cid = await setup(api)
+
+    async def deadlock(*args, **kwargs):
+        raise DBAPIError("UPDATE", {}, DeadlockDetectedError("deadlock detected"))
+
+    monkeypatch.setattr(data_routes, "add_record", deadlock)
+    r = await api.post(
+        records_url(bot_id, cid),
+        json={"data": {"name": "A", "date": "2030-01-10", "time": "17:00"}},
+        headers=auth(BOB),
+    )
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+
+
+async def test_owner_panel_changes_notify_the_author(api) -> None:
+    bot_id, cid = await setup(api)
+    events = {"notify": [{"on": "update", "to": "author"}, {"on": "delete", "to": "author"}]}
+    put = await api.put(
+        f"/api/bots/{bot_id}/collections/{cid}/events", json=events, headers=auth(ALICE)
+    )
+    assert put.status_code == 200
+    made = await api.post(
+        records_url(bot_id, cid),
+        json={"data": {"name": "Bob", "date": "2030-01-10", "time": "17:00"}},
+        headers=auth(BOB),
+    )
+    rid = made.json()["id"]
+    changed = await api.patch(
+        records_url(bot_id, cid, rid),
+        json={"changes": {"time": "18:00"}, "version": 1},
+        headers=auth(ALICE),
+    )
+    gone = await api.delete(records_url(bot_id, cid, rid), headers=auth(ALICE))
+    assert changed.status_code == 200 and gone.status_code == 204
+
+    async with api.state.sessionmaker() as session:
+        bob = await session.scalar(select(User).where(User.tg_user_id == BOB["id"]))
+        alice = await session.scalar(select(User).where(User.tg_user_id == ALICE["id"]))
+        events = list(await session.scalars(select(RecordEvent).order_by(RecordEvent.id)))
+    assert [(e.kind, e.record_id) for e in events] == [("update", rid), ("delete", rid)]
+    assert {e.recipient_user_id for e in events} == {bob.id}
+    assert {e.actor_user_id for e in events} == {alice.id}
+    assert events[0].data["time"] == "18:00"
 
 
 async def test_hidden_fields_only_for_editors(api) -> None:
@@ -387,6 +506,43 @@ async def test_csv_neutralizes_formulas_and_uses_collection_timezone(api) -> Non
     assert "'=1+1" in text.splitlines()[1]
 
 
+async def test_csv_quotes_formula_labels_but_not_phones(api) -> None:
+    schema = CollectionSchema.model_validate(
+        {
+            "fields": [
+                {"key": "sum", "label": {"en": "=SUM(A1)"}, "type": "text"},
+                {"key": "phone", "label": {"en": "Phone"}, "type": "phone"},
+            ]
+        }
+    )
+    async with api.state.sessionmaker() as session:
+        bot_id = await make_bot(api, ALICE, 74)
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        c = await create_collection(
+            session,
+            api.state.pricing,
+            bot=bot,
+            key="calls",
+            title={"en": "C"},
+            scope=CollectionScope.SHARED,
+            schema=schema,
+        )
+        await session.commit()
+        cid = c.id
+    made = await api.post(
+        records_url(bot_id, cid),
+        json={"data": {"sum": "+1", "phone": "+98 912 000 0000"}},
+        headers=auth(ALICE),
+    )
+    assert made.status_code == 201
+    link = await api.post(f"/api/bots/{bot_id}/collections/{cid}/export", headers=auth(ALICE))
+    lines = (
+        (await api.get(link.json()["url"])).content.decode("utf-8").lstrip("\ufeff").splitlines()
+    )
+    assert lines[0] == "'=SUM(A1),Phone"
+    assert lines[1] == "'+1,+989120000000"
+
+
 async def test_csv_datetime_in_collection_timezone(api) -> None:
     schema = CollectionSchema.model_validate(
         {"fields": [{"key": "at", "label": {"en": "At"}, "type": "datetime"}]}
@@ -394,6 +550,7 @@ async def test_csv_datetime_in_collection_timezone(api) -> None:
     async with api.state.sessionmaker() as session:
         bot_id = await make_bot(api, ALICE, 73)
         bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        bot.owner.timezone = "Asia/Tehran"
         c = await create_collection(
             session,
             api.state.pricing,
@@ -412,12 +569,10 @@ async def test_csv_datetime_in_collection_timezone(api) -> None:
     )
     assert made.status_code == 201
     [out] = (await api.get(f"/api/bots/{bot_id}/collections", headers=auth(ALICE))).json()
+    assert out["timezone"] == "Asia/Tehran"
     link = await api.post(f"/api/bots/{bot_id}/collections/{cid}/export", headers=auth(ALICE))
     text = (await api.get(link.json()["url"])).content.decode("utf-8")
-    expected = (
-        datetime(2030, 1, 10, 12, tzinfo=UTC).astimezone(ZoneInfo(out["timezone"]))
-    ).strftime("%Y-%m-%d %H:%M")
-    assert expected in text.splitlines()[1]
+    assert text.splitlines()[1] == "2030-01-10 15:30"  # 12:00 UTC is 15:30 in Tehran
 
 
 async def test_creator_edits_own_personal_collection(api) -> None:
