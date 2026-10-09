@@ -9,7 +9,7 @@ import json
 import re
 import secrets
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -81,10 +81,6 @@ class DesignerOutput(BaseModel):
         description="Only questions whose answers are essential and cannot be guessed.",
     )
     reply: str = Field(description="Short message to the user, in the user's language.")
-    dropped_collections: list[str] = Field(
-        default=[],
-        description="Set by the system, never by you: keys of collections it had to drop.",
-    )
 
 
 def _problems(draft: BotDraft) -> dict[str, str]:
@@ -113,11 +109,11 @@ def check_output(output: DesignerOutput) -> None:
         raise ModelRetry("; ".join(problems.values()))
 
 
-def drop_invalid_collections(output: DesignerOutput) -> DesignerOutput:
-    """The output without the collections obot.data would refuse; their keys are listed."""
+def drop_invalid_collections(output: DesignerOutput) -> tuple[DesignerOutput, list[str]]:
+    """The output without the collections obot.data would refuse, and the dropped keys."""
     draft = output.draft
     if draft is None or not _problems(draft):
-        return output
+        return output, []
     kept, dropped, seen = [], [], set()
     for c in draft.collections:
         try:
@@ -130,12 +126,8 @@ def drop_invalid_collections(output: DesignerOutput) -> DesignerOutput:
             kept.append(c)
         elif c.key not in dropped:
             dropped.append(c.key)
-    return output.model_copy(
-        update={
-            "draft": draft.model_copy(update={"collections": kept}),
-            "dropped_collections": dropped,
-        }
-    )
+    trimmed = output.model_copy(update={"draft": draft.model_copy(update={"collections": kept})})
+    return trimmed, dropped
 
 
 @dataclass(frozen=True)
@@ -150,6 +142,7 @@ class DesignerResult:
     model_name: str
     input_tokens: int
     output_tokens: int
+    dropped_collections: list[str] = field(default_factory=list)
 
 
 def _instructions() -> str:
@@ -223,10 +216,14 @@ async def design(
 ) -> DesignerResult:
     agent = Agent(model, output_type=DesignerOutput, instructions=_instructions(), retries=2)
 
+    dropped: list[str] = []
+
     @agent.output_validator
     def _valid(ctx: RunContext[None], output: DesignerOutput) -> DesignerOutput:
         if ctx.retry >= ctx.max_retries:
-            return drop_invalid_collections(output)  # last chance: never lose the turn
+            # Last chance: never lose the turn.
+            trimmed, dropped[:] = drop_invalid_collections(output)
+            return trimmed
         check_output(output)
         return output
 
@@ -237,6 +234,7 @@ async def design(
         model_name=model.model_name,
         input_tokens=result.usage.input_tokens,
         output_tokens=result.usage.output_tokens,
+        dropped_collections=dropped,
     )
 
 

@@ -248,7 +248,7 @@ async def test_design_drops_collections_that_stay_invalid() -> None:
     result = await design(_reply_with(bad), "x")
 
     assert [c.key for c in result.output.draft.collections] == ["b"]
-    assert result.output.dropped_collections == ["appointments"]
+    assert result.dropped_collections == ["appointments"]
 
 
 async def test_design_keeps_the_fixed_collection_after_a_retry() -> None:
@@ -257,7 +257,7 @@ async def test_design_keeps_the_fixed_collection_after_a_retry() -> None:
     result = await design(_reply_with(bad, DENTIST), "x")
 
     assert [c.key for c in result.output.draft.collections] == ["appointments"]
-    assert result.output.dropped_collections == []
+    assert result.dropped_collections == []
 
 
 def test_duplicate_key_retry_names_the_key() -> None:
@@ -291,3 +291,8 @@ async def test_card_survives_and_escapes_collections(session) -> None:
     assert "<b>x</b>" not in card and "&lt;b&gt;x&lt;/b&gt;" in card
     assert "<i>n</i>" not in card
     assert "&lt;u&gt;bad&lt;/u&gt;" in card and "needs fixing" in card
+
+
+def test_the_model_cannot_see_or_set_the_dropped_note() -> None:
+    assert "dropped_collections" not in DesignerOutput.model_json_schema()["properties"]
+    assert "dropped_collections" not in DesignerOutput.model_fields
