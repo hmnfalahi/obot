@@ -79,7 +79,9 @@ class DraftHours(BaseModel):
 class DraftReminder(BaseModel):
     date_field: str
     time_field: str | None = Field(default=None, description="With a date field.")
-    before_minutes: int = Field(description="e.g. 1440 for a day before, 60 for an hour.")
+    before_minutes: int = Field(
+        ge=0, le=30 * 24 * 60, description="e.g. 1440 for a day before, 60 for an hour."
+    )
 
 
 class CollectionDraft(BaseModel):
@@ -127,8 +129,11 @@ def to_events(d: CollectionDraft, current: CollectionEvents) -> CollectionEvents
     remind = current.remind
     if d.no_reminder:
         remind = []
-    elif d.reminder is not None:
-        remind = [RemindRule(**d.reminder.model_dump())]
+    elif d.reminder is not None and not _same_reminder(d.reminder, current.remind):
+        try:
+            remind = [RemindRule(**d.reminder.model_dump())]
+        except ValidationError as e:
+            raise InvalidSchema(f"{d.key}: reminder: {_reasons(e)}") from None
     order = ["create", "update", "delete"]
     return CollectionEvents(
         notify=[
@@ -136,6 +141,14 @@ def to_events(d: CollectionDraft, current: CollectionEvents) -> CollectionEvents
             for on, to in sorted(notify, key=lambda n: (order.index(n[0]), n[1]))
         ],
         remind=remind,
+    )
+
+
+def _same_reminder(r: DraftReminder, current: list[RemindRule]) -> bool:
+    """The designer echoing the current first reminder changes nothing."""
+    return bool(current) and (
+        (current[0].date_field, current[0].time_field, current[0].before_minutes)
+        == (r.date_field, r.time_field, r.before_minutes)
     )
 
 

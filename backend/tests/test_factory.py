@@ -18,7 +18,7 @@ from obot.data import schema as schema_module
 from obot.data.repository import add_record, template_collections
 from obot.data.repository import collection_schema as schema_of
 from obot.db.models import DraftKind, DraftState
-from obot.factory.collections import sync_collections
+from obot.factory.collections import DraftReminder, sync_collections
 from obot.factory.designer import (
     BotDraft,
     DesignerOutput,
@@ -378,3 +378,48 @@ def test_every_refused_change_and_problem_has_words_in_both_languages() -> None:
             assert f"factory.change.{change}" in MESSAGES[lang]
         for reason in reasons:
             assert f"factory.problem.{reason}" in MESSAGES[lang]
+
+
+PERSONAL_NOTIFY = BOOKINGS.model_copy(
+    update={
+        "key": "notes",
+        "scope": "personal",
+        "notify_owner": True,
+        "unique": [],
+        "allowed_hours": None,
+    }
+)
+TEXT_REMINDER = BOOKINGS.model_copy(
+    update={"reminder": DraftReminder(date_field="name", before_minutes=60)}
+)
+
+
+@pytest.mark.parametrize("bad", [PERSONAL_NOTIFY, TEXT_REMINDER])
+def test_bad_event_switches_ask_the_model_to_retry(bad) -> None:
+    output = DesignerOutput(
+        action="draft", draft=DRAFT.model_copy(update={"collections": [bad]}), reply="ok"
+    )
+    with pytest.raises(ModelRetry, match=bad.key):
+        check_output(output)
+
+
+async def test_design_drops_a_collection_with_bad_events() -> None:
+    bad = DRAFT.model_copy(
+        update={"collections": [PERSONAL_NOTIFY, BOOKINGS.model_copy(update={"key": "b"})]}
+    )
+
+    result = await design(_reply_with(bad), "x")
+
+    assert [c.key for c in result.output.draft.collections] == ["b"]
+
+
+def test_an_unbuildable_reminder_is_an_invalid_schema() -> None:
+    from obot.data.errors import InvalidSchema
+    from obot.data.schema import CollectionEvents
+    from obot.factory.collections import to_events
+
+    wild = BOOKINGS.model_copy(
+        update={"reminder": DraftReminder.model_construct(date_field="date", before_minutes=-5)}
+    )
+    with pytest.raises(InvalidSchema):
+        to_events(wild, CollectionEvents())
