@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from aiogram import Bot
 from fastapi import FastAPI
 
+from obot.api import data_routes
 from obot.api.deps import ApiState
 from obot.api.routes import router
 from obot.billing.plans import Pricing
@@ -57,6 +58,7 @@ def create_app(state: ApiState | None = None, lifespan=None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(router)
+    app.include_router(data_routes.router)
     return app
 
 

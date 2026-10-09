@@ -8,10 +8,11 @@ from sqlalchemy.orm import joinedload
 
 from obot.api.auth import InvalidInitData, validate_init_data
 from obot.billing.plans import Pricing
+from obot.bots.access import can_use
 from obot.bots.service import get_or_create_user
 from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
-from obot.db.models import ApiEndpoint, Bot, Task, User
+from obot.db.models import ApiEndpoint, Bot, BotStatus, Task, User
 
 
 @dataclass
@@ -71,6 +72,17 @@ async def owned_bot(bot_id: int, user: CurrentUser, session: Session) -> Bot:
 
 
 OwnedBot = Annotated[Bot, Depends(owned_bot)]
+
+
+async def usable_bot(bot_id: int, user: CurrentUser, session: Session) -> Bot:
+    """An active bot the user may use (its owner always may); 404 otherwise."""
+    bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+    if bot is None or bot.status != BotStatus.ACTIVE or not can_use(bot, user.tg_user_id):
+        raise HTTPException(404, "bot not found")
+    return bot
+
+
+UsableBot = Annotated[Bot, Depends(usable_bot)]
 
 
 async def owned_task(task_id: int, user: CurrentUser, session: Session) -> Task:

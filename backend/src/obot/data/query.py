@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import TIMESTAMP, ColumnElement, Date, Numeric, cast, func, select, text
+from sqlalchemy import TIMESTAMP, ColumnElement, Date, Numeric, cast, false, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.data.errors import InvalidQuery
@@ -129,6 +129,8 @@ async def find_records(
     sort: str | None = None,
     descending: bool = True,
     limit: int = 20,
+    search: str | None = None,
+    offset: int = 0,
 ) -> list[Record]:
     """Records of `c` the space may read, newest first unless sorted by a field."""
     require_visible(space, c)
@@ -137,6 +139,16 @@ async def find_records(
     query = select(Record).where(
         *row_filter(space, c), *[_condition(schema, f, tz) for f in filters]
     )
+    needle = (search or "").strip()
+    if needle:
+        like = f"%{_escape_like(needle)}%"
+        columns = [
+            Record.data[f.key].astext.ilike(like, escape="\\")
+            for f in schema.fields
+            if not f.hidden and f.type in (FieldType.TEXT, FieldType.PHONE, FieldType.CHOICE)
+        ]
+        # A collection with nothing to search in matches nothing.
+        query = query.where(or_(*columns) if columns else false())
     if sort is not None:
         key = _typed(_field(schema, sort))
         query = query.order_by(
@@ -144,7 +156,7 @@ async def find_records(
         )
     else:
         query = query.order_by(Record.id.desc() if descending else Record.id)
-    rows = await session.scalars(query.limit(max(1, min(limit, MAX_FIND))))
+    rows = await session.scalars(query.offset(max(0, offset)).limit(max(1, min(limit, MAX_FIND))))
     return list(rows)
 
 
