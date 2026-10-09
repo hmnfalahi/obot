@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { api, dataErrorOf, type DataCollection, type DataRecord, type FieldDef } from '../api'
-import { formatDate, hasText, localDateTime, titleOf, useI18n } from '../i18n'
+import { fieldReason, formatDate, hasText, localDateTime, titleOf, useI18n, type Translate } from '../i18n'
 import { confirm, haptic } from '../telegram'
 
 type Value = string | boolean
@@ -96,6 +96,7 @@ export function RecordForm(props: {
   return (
     <div className="card">
       <strong>{record ? t('editRecord') : t('addRecord')}</strong>
+      {c.scope === 'shared' && !c.is_owner && <p className="hint">{t('sharedNotice')}</p>}
       {fields.map((f) => (
         <div key={f.key}>
           <FieldInput
@@ -103,20 +104,14 @@ export function RecordForm(props: {
             value={values[f.key]}
             onChange={(v) => setValues({ ...values, [f.key]: v })}
           />
-          {fieldErrors[f.key] && (
-            <div className="field-error" dir="ltr">
-              {fieldErrors[f.key]}
-            </div>
-          )}
+          {fieldErrors[f.key] && <FieldError reason={fieldErrors[f.key]} t={t} />}
         </div>
       ))}
       {error && <p className="error">{error}</p>}
       {Object.entries(fieldErrors)
         .filter(([key]) => !fields.some((f) => f.key === key))
         .map(([key, reason]) => (
-          <div key={key} className="field-error" dir="ltr">
-            {key ? `${key}: ${reason}` : reason}
-          </div>
+          <FieldError key={key} reason={reason} t={t} field={key} />
         ))}
       <div className="row" style={{ marginTop: 12 }}>
         <button className="btn" disabled={busy} onClick={save}>
@@ -131,6 +126,22 @@ export function RecordForm(props: {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+/** A field's problem in the user's language; a reason the app doesn't know stays in English. */
+function FieldError({ reason, t, field }: { reason: string; t: Translate; field?: string }) {
+  const { text, raw } = fieldReason(reason, t)
+  return (
+    <div className="field-error" dir={raw ? 'ltr' : undefined}>
+      {field ? (
+        <>
+          <span dir="ltr">{field}</span>: {text}
+        </>
+      ) : (
+        text
+      )}
     </div>
   )
 }

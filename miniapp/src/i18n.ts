@@ -154,6 +154,20 @@ const en = {
   'dataError.collection_not_found': 'This list was not found.',
   'dataError.record_not_found': 'This record no longer exists; the list was reloaded.',
   'dataError.invalid_query': 'That search or filter doesn’t work for this list.',
+  'dataError.busy': 'Someone changed this at the same moment; try again.',
+  sharedNotice: 'The bot’s owner will see what you save here.',
+  'fieldError.required': 'Required.',
+  'fieldError.number': 'Not a number.',
+  'fieldError.date': 'Not a valid date.',
+  'fieldError.time': 'Not a valid time (like 17:30).',
+  'fieldError.datetime': 'Not a valid date and time.',
+  'fieldError.phone': 'Not a phone number.',
+  'fieldError.boolean': 'Pick yes or no.',
+  'fieldError.choice': 'Pick one of: {options}',
+  'fieldError.min': 'At least {value}.',
+  'fieldError.max': 'At most {value}.',
+  'fieldError.too_long': 'Longer than {n} characters.',
+  'fieldError.unknown': 'This list has no such field.',
   editList: 'Edit list',
   listTitle: 'List name',
   fields: 'Fields',
@@ -380,6 +394,20 @@ const fa: Record<Key, string> = {
   'dataError.collection_not_found': 'این فهرست پیدا نشد.',
   'dataError.record_not_found': 'این رکورد دیگه وجود نداره؛ فهرست دوباره بارگذاری شد.',
   'dataError.invalid_query': 'این جستجو یا فیلتر برای این فهرست جواب نمی‌ده.',
+  'dataError.busy': 'یکی هم‌زمان داشت تغییرش می‌داد؛ دوباره امتحان کن.',
+  sharedNotice: 'صاحب بات هر چی اینجا ذخیره کنی رو می‌بینه.',
+  'fieldError.required': 'اینو باید پر کنی.',
+  'fieldError.number': 'باید عدد باشه.',
+  'fieldError.date': 'تاریخ درست نیست.',
+  'fieldError.time': 'ساعت درست نیست (مثلاً ۱۷:۳۰).',
+  'fieldError.datetime': 'تاریخ و ساعت درست نیست.',
+  'fieldError.phone': 'شماره تلفن درست نیست.',
+  'fieldError.boolean': 'بله یا نه رو انتخاب کن.',
+  'fieldError.choice': 'یکی از این‌ها رو انتخاب کن: {options}',
+  'fieldError.min': 'دست‌کم {value}.',
+  'fieldError.max': 'حداکثر {value}.',
+  'fieldError.too_long': 'بیشتر از {n} حرفه.',
+  'fieldError.unknown': 'این فهرست همچین فیلدی نداره.',
   editList: 'ویرایش فهرست',
   listTitle: 'اسم فهرست',
   fields: 'فیلدها',
@@ -497,6 +525,38 @@ export function formatNumber(n: number, lang: Lang): string {
 /** A label in the user's language, else any language, else `fallback`. */
 export function titleOf(labels: Record<string, string>, lang: Lang, fallback: string): string {
   return labels[lang] ?? Object.values(labels)[0] ?? fallback
+}
+
+/** A `HH:MM` time; fa shows Persian digits. */
+export function formatTime(hhmm: string, lang: Lang): string {
+  return lang === 'fa' ? hhmm.replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]) : hhmm
+}
+
+/** A field error's reason from the server in the user's language; unknown reasons stay as
+ * they are (`raw`), in English. */
+export function fieldReason(reason: string, t: Translate): { text: string; raw: boolean } {
+  const exact: Record<string, string> = {
+    required: 'fieldError.required',
+    'not a number': 'fieldError.number',
+    'not a date (YYYY-MM-DD)': 'fieldError.date',
+    'not a time (HH:MM)': 'fieldError.time',
+    'not a date and time (YYYY-MM-DDTHH:MM)': 'fieldError.datetime',
+    'not a phone number': 'fieldError.phone',
+    'not yes or no': 'fieldError.boolean',
+    'unknown field': 'fieldError.unknown',
+  }
+  if (exact[reason]) return { text: t(exact[reason]), raw: false }
+  const patterns: [RegExp, string, string][] = [
+    [/^must be one of: (.*)$/s, 'fieldError.choice', 'options'],
+    [/^must be at least (.*)$/, 'fieldError.min', 'value'],
+    [/^must be at most (.*)$/, 'fieldError.max', 'value'],
+    [/^longer than (\d+) characters$/, 'fieldError.too_long', 'n'],
+  ]
+  for (const [pattern, key, name] of patterns) {
+    const match = pattern.exec(reason)
+    if (match) return { text: t(key, { [name]: match[1] }), raw: false }
+  }
+  return { text: reason, raw: true }
 }
 
 /** A `YYYY-MM-DD` date; fa shows the Persian (Jalali) calendar. */
