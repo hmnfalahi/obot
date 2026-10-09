@@ -5,6 +5,7 @@ import {
   formatDate,
   formatDateTime,
   formatNumber,
+  formatTime,
   hasText,
   localDateTime,
   titleOf,
@@ -274,7 +275,7 @@ function CalendarView(props: {
                   <button key={r.id} className="cal-row" onClick={() => props.onOpen(r)}>
                     {at[1] && (
                       <span className="hint" dir="ltr">
-                        {at[1]}
+                        {formatTime(at[1], lang)}
                       </span>
                     )}
                     <span>{textField ? String(r.data[textField.key] ?? '') : ''}</span>
@@ -393,6 +394,8 @@ function formatValue(f: FieldDef, v: unknown, lang: Lang, timeZone: string, t: T
       return formatDate(String(v), lang)
     case 'datetime':
       return formatDateTime(String(v), lang, timeZone)
+    case 'time':
+      return formatTime(String(v), lang)
     case 'boolean':
       return v ? t('yes') : t('no')
     case 'number':

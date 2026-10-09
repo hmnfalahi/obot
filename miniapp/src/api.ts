@@ -238,6 +238,8 @@ export interface DataCollection {
   title: Record<string, string>
   scope: 'personal' | 'shared' | 'group'
   mine: boolean
+  /** The caller owns the bot, so sees everyone's records in a shared list. */
+  is_owner: boolean
   can_edit: boolean
   schema_version: number
   fields: FieldDef[]
