@@ -164,3 +164,61 @@ async def test_find_hides_hidden_fields(world) -> None:
         await s.commit()
     found = await alice.find("expenses")
     assert '"amount": "3"' in found and "food" not in found
+
+
+async def _hide_category(world) -> None:
+    async with world.sessions() as s:
+        space = await world.space(world.alice)
+        c = await get_collection(s, space, "expenses")
+        schema = collection_schema(c).model_dump(mode="json")
+        for f in schema["fields"]:
+            if f["key"] == "category":
+                f["hidden"] = True
+        await update_collection_schema(s, c, CollectionSchema.model_validate(schema))
+        await s.commit()
+
+
+async def test_ok_texts_omit_hidden_fields(world) -> None:
+    alice = service(world, world.alice)
+    saved = await alice.add("expenses", {"amount": 3, "category": "food"})
+    record_id = int(saved.split("#")[1].split(":")[0])
+    await _hide_category(world)
+    updated = await alice.update("expenses", record_id, {"amount": 4})
+    assert updated.startswith("OK:") and '"amount": "4"' in updated and "food" not in updated
+    added = await alice.add("expenses", {"amount": 5})
+    assert "category" not in added
+
+
+async def test_failing_notice_does_not_undo_the_save(world) -> None:
+    notice = AsyncMock(side_effect=RuntimeError("telegram down"))
+    bob = service(world, world.bob, notice_shared=notice)
+    ok = await bob.add("bookings", {"name": "Bob", "date": "2026-10-11", "time": "10:00"})
+    assert ok.startswith("OK:") and notice.await_count == 1
+    owner = service(world, world.owner)
+    assert (await owner.find("bookings")).count("#") == 1
+
+
+async def test_bad_inputs_never_raise(world) -> None:
+    alice = service(world, world.alice)
+    for bad in (0, 10**30, -5):
+        assert "no record" in await alice.update("expenses", bad, {"amount": 1})
+        confirm = AsyncMock()
+        assert "no record" in await service(world, world.alice, confirm_delete=confirm).delete(
+            "expenses", bad
+        )
+        confirm.assert_not_awaited()
+    assert (await alice.add("expenses", ["x"])).startswith("ERROR: ")  # type: ignore[arg-type]
+    assert (await alice.update("expenses", 1, "x")).startswith("ERROR: ")  # type: ignore[arg-type]
+
+
+async def test_raising_confirm_is_reported_as_text(world) -> None:
+    saved = await service(world, world.alice).add("expenses", {"amount": 7})
+    record_id = int(saved.split("#")[1].split(":")[0])
+    confirm = AsyncMock(side_effect=RuntimeError("boom"))
+    out = await service(world, world.alice, confirm_delete=confirm).delete("expenses", record_id)
+    assert out == "ERROR: could not ask the user to confirm; try again later."
+
+
+async def test_missing_user_is_collection_not_found(world) -> None:
+    out = await DataService(world.sessions, world.pricing, world.bot.id, 10**9).find("expenses")
+    assert "no collection named 'expenses'" in out
