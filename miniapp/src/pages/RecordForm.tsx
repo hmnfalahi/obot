@@ -1,12 +1,12 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { api, dataErrorOf, type DataCollection, type DataRecord, type FieldDef } from '../api'
-import { formatDate, localDateTime, titleOf, useI18n } from '../i18n'
+import { formatDate, hasText, localDateTime, titleOf, useI18n } from '../i18n'
 import { confirm, haptic } from '../telegram'
 
 type Value = string | boolean
 
-/** Error codes with their own text; others read as dataError.other. */
-const KNOWN_ERRORS = ['duplicate', 'outside_allowed_hours', 'invalid', 'limit_reached', 'stale', 'not_allowed']
+/** The record changed or went away meanwhile: the form closes and the list reloads. */
+const CLOSING_ERRORS = ['stale', 'record_not_found']
 
 function initialValues(c: DataCollection, record: DataRecord | null): Record<string, Value> {
   const values: Record<string, Value> = {}
@@ -44,22 +44,22 @@ export function RecordForm(props: {
     return f ? titleOf(f.label, lang, f.key) : key
   }
 
-  const fail = (e: unknown) => {
+  const fail = (e: unknown, fallback: string) => {
     haptic('error')
     const detail = dataErrorOf(e)
     if (!detail) {
       setError((e as Error).message)
       return
     }
-    const code = KNOWN_ERRORS.includes(detail.code) ? detail.code : 'other'
-    const message = t(`dataError.${code}`, { fields: detail.fields.map(labelOf).join(' + ') })
-    // A stale record closes the form; the parent reloads and shows why.
-    if (code === 'stale') return props.onCancel(message)
+    const key = hasText(`dataError.${detail.code}`) ? `dataError.${detail.code}` : fallback
+    const message = t(key, { fields: detail.fields.map(labelOf).join(' + ') })
+    // The parent reloads and shows why the form closed.
+    if (CLOSING_ERRORS.includes(detail.code)) return props.onCancel(message)
     setError(message)
     setFieldErrors(Object.fromEntries(detail.errors.map((x) => [x.field, x.reason])))
   }
 
-  const run = async (action: () => Promise<unknown>, done: () => void) => {
+  const run = async (action: () => Promise<unknown>, done: () => void, fallback = 'dataError.other') => {
     setBusy(true)
     setError(null)
     setFieldErrors({})
@@ -68,7 +68,7 @@ export function RecordForm(props: {
       haptic('success')
       done()
     } catch (e) {
-      fail(e)
+      fail(e, fallback)
     } finally {
       setBusy(false)
     }
@@ -90,7 +90,7 @@ export function RecordForm(props: {
 
   const remove = async () => {
     if (!record || !(await confirm(t('deleteRecordConfirm')))) return
-    await run(() => api.deleteRecord(botId, c.id, record.id), props.onDeleted)
+    await run(() => api.deleteRecord(botId, c.id, record.id), props.onDeleted, 'dataError.failed')
   }
 
   return (
@@ -137,6 +137,7 @@ export function RecordForm(props: {
 
 function FieldInput({ field: f, value, onChange }: { field: FieldDef; value: Value; onChange: (v: Value) => void }) {
   const { t, lang } = useI18n()
+  const id = useId()
   const label = titleOf(f.label, lang, f.key)
   const text = typeof value === 'string' ? value : ''
   const set = (e: { target: { value: string } }) => onChange(e.target.value)
@@ -153,24 +154,24 @@ function FieldInput({ field: f, value, onChange }: { field: FieldDef; value: Val
   let input
   switch (f.type) {
     case 'phone':
-      input = <input type="tel" dir="ltr" value={text} onChange={set} />
+      input = <input id={id} type="tel" dir="ltr" value={text} onChange={set} />
       break
     case 'number':
     case 'money':
-      input = <input inputMode="decimal" value={text} onChange={set} />
+      input = <input id={id} inputMode="decimal" value={text} onChange={set} />
       break
     case 'date':
-      input = <input type="date" value={text} onChange={set} />
+      input = <input id={id} type="date" value={text} onChange={set} />
       break
     case 'time':
-      input = <input type="time" value={text} onChange={set} />
+      input = <input id={id} type="time" value={text} onChange={set} />
       break
     case 'datetime':
-      input = <input type="datetime-local" value={text} onChange={set} />
+      input = <input id={id} type="datetime-local" value={text} onChange={set} />
       break
     case 'choice':
       input = (
-        <select value={text} onChange={set}>
+        <select id={id} value={text} onChange={set}>
           <option value="" />
           {f.options.map((o) => (
             <option key={o} value={o}>
@@ -181,12 +182,12 @@ function FieldInput({ field: f, value, onChange }: { field: FieldDef; value: Val
       )
       break
     default:
-      input = <input value={text} onChange={set} />
+      input = <input id={id} value={text} onChange={set} />
   }
 
   return (
     <>
-      <label>
+      <label htmlFor={id}>
         {label}
         {f.type === 'money' && f.currency && ` (${f.currency})`}
         {f.required && ` · ${t('required')}`}

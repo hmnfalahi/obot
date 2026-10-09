@@ -307,7 +307,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     try {
       const data = await response.json()
       detail = data.detail
-      message = typeof detail === 'string' ? detail : JSON.stringify(detail)
+      const text = (detail as { message?: unknown } | null)?.message
+      message = typeof detail === 'string' ? detail : typeof text === 'string' ? text : JSON.stringify(detail)
     } catch {
       // keep statusText
     }
