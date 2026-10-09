@@ -11,7 +11,7 @@ from obot.data.repository import (
     update_collection_schema,
 )
 from obot.data.schema import CollectionSchema
-from obot.data.service import DataService
+from obot.data.service import DataService, Definition, apply_definition
 from obot.db.models import CollectionScope
 
 EXPENSES = CollectionSchema.model_validate(
@@ -274,3 +274,127 @@ async def test_a_failing_catalog_leaves_the_callers_session_usable(data_world, m
     assert await service.note(w.session) is None
     # The failed statement was rolled back to a savepoint: the reply can go on.
     assert await w.session.scalar(text("select 1")) == 1
+
+
+WEIGHT_FIELDS = [
+    {"key": "day", "label": "روز", "type": "date", "required": True},
+    {"key": "kg", "label": "وزن", "type": "number", "required": True},
+]
+
+
+async def test_define_proposes_and_creates_nothing_until_applied(data_world) -> None:
+    w = data_world
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock(return_value="Shown with Save/Cancel.")
+    alice = DataService(sessions, w.pricing, w.bot.id, w.alice.id, propose_define=propose)
+
+    told = await alice.define("weight", "وزن من", WEIGHT_FIELDS)
+
+    assert told == "Shown with Save/Cancel."
+    d: Definition = propose.await_args.args[0]
+    assert (d.key, d.collection_id, d.added) == ("weight", None, ["day", "kg"])
+    assert d.title == {"fa": "وزن من"}  # Alice speaks Persian
+    assert d.schema["fields"][1]["label"] == {"fa": "وزن"}
+    assert Definition.from_json(d.to_json()) == d
+    async with sessions() as s:
+        assert await alice.note(s) is None  # nothing created yet
+
+        created = await apply_definition(s, w.pricing, d)
+        await s.commit()
+    assert created.created_by_user_id == w.alice.id
+    assert (await alice.add("weight", {"day": "2026-10-09", "kg": "72.5"})).startswith("OK:")
+    # Bob does not see Alice's collection.
+    assert "no collection named 'weight'" in await DataService(
+        sessions, w.pricing, w.bot.id, w.bob.id
+    ).find("weight")
+
+
+async def test_define_adds_fields_to_the_persons_own_collection(data_world) -> None:
+    w = data_world
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock(return_value="ok")
+    alice = DataService(sessions, w.pricing, w.bot.id, w.alice.id, propose_define=propose)
+    await alice.define("weight", "Weight", WEIGHT_FIELDS)
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, propose.await_args.args[0])
+        await s.commit()
+    await alice.add("weight", {"day": "2026-10-09", "kg": 72})
+
+    await alice.define(
+        "weight",
+        "ignored",
+        [*WEIGHT_FIELDS, {"key": "note", "label": "Note", "type": "text"}],
+    )
+
+    d = propose.await_args.args[0]
+    assert d.collection_id is not None and d.added == ["note"]
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, d)
+        await s.commit()
+    assert (await alice.add("weight", {"day": "2026-10-10", "kg": 71, "note": "gym"})).startswith(
+        "OK:"
+    )
+
+
+async def test_define_refusals_are_error_text(data_world) -> None:
+    w = data_world
+    await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="expenses",
+        title={"en": "E"},
+        scope=CollectionScope.PERSONAL,
+        schema=EXPENSES,
+    )
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock(return_value="ok")
+    alice = DataService(sessions, w.pricing, w.bot.id, w.alice.id, propose_define=propose)
+
+    cases = {
+        "template": await alice.define("expenses", "E", WEIGHT_FIELDS),
+        "bad type": await alice.define("w", "W", [{"key": "a", "label": "A", "type": "color"}]),
+        "choice": await alice.define("w", "W", [{"key": "a", "label": "A", "type": "choice"}]),
+        "bad key": await alice.define("My List", "W", WEIGHT_FIELDS),
+        "no fields": await alice.define("w", "W", []),
+        "not a list": await alice.define("w", "W", "day, kg"),
+    }
+    for name, text in cases.items():
+        assert text.startswith("ERROR: "), (name, text)
+    assert "bot's own collections" in cases["template"]
+    propose.assert_not_awaited()
+    assert (
+        await DataService(sessions, w.pricing, w.bot.id, w.alice.id).define("w", "W", WEIGHT_FIELDS)
+    ).startswith("ERROR: ")
+
+
+async def test_define_respects_the_persons_collection_limit(data_world) -> None:
+    w = data_world
+    await w.session.commit()
+    w.pricing.plan("free").max_data_collections = 1
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock(return_value="ok")
+    alice = DataService(sessions, w.pricing, w.bot.id, w.alice.id, propose_define=propose)
+    await alice.define("weight", "W", WEIGHT_FIELDS)
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, propose.await_args.args[0])
+        await s.commit()
+
+    assert "limit" in await alice.define("sleep", "S", WEIGHT_FIELDS)
+
+
+async def test_nothing_new_to_add_is_refused(data_world) -> None:
+    w = data_world
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock(return_value="ok")
+    alice = DataService(sessions, w.pricing, w.bot.id, w.alice.id, propose_define=propose)
+    await alice.define("weight", "W", WEIGHT_FIELDS)
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, propose.await_args.args[0])
+        await s.commit()
+
+    assert "nothing new" in await alice.define("weight", "W", WEIGHT_FIELDS)
