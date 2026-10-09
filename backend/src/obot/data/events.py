@@ -35,6 +35,11 @@ DATE_ONLY_AT = time(9, 0)  # reminders for a date without a time
 LATE_GRACE = timedelta(minutes=10)
 
 
+async def event_chat(session: AsyncSession, ev: RecordEvent) -> int | None:
+    """The group whose record an event is about; None outside groups or once purged."""
+    return await session.scalar(select(Record.tg_chat_id).where(Record.id == ev.record_id))
+
+
 def collection_events(c: Collection) -> CollectionEvents:
     return CollectionEvents.model_validate(c.events or {})
 
