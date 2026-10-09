@@ -37,12 +37,12 @@ from obot.data.query import availability as find_taken
 from obot.data.repository import (
     MAX_ID,
     add_record,
-    collection_by_id,
     collection_schema,
     create_collection,
     get_collection,
     get_record,
     list_collections,
+    lock_collection,
     update_collection_schema,
     update_record,
 )
@@ -66,6 +66,7 @@ class Definition:
     title: dict[str, str]
     schema: dict[str, Any]  # CollectionSchema as JSON
     collection_id: int | None
+    schema_version: int | None  # the collection's version when proposed; None for a new one
     added: list[str]  # keys of new fields, or of choice fields that got new options
 
     def to_json(self) -> str:
@@ -90,6 +91,11 @@ def parse_field_specs(fields: Any, lang: str) -> list[dict[str, Any]]:
         if not isinstance(item, dict) or not {"key", "label", "type"} <= item.keys():
             raise InvalidSchema("each field needs key, label and type")
         spec = {k: v for k, v in item.items() if k in FIELD_SPEC_KEYS and v is not None}
+        if "options" in spec:
+            options = spec["options"]
+            if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
+                raise InvalidSchema(f"{item['key']}: options must be a list of strings")
+            spec["options"] = [o.strip() for o in options]
         spec["label"] = {lang: str(item["label"]).strip() or str(item["key"])}
         specs.append(spec)
     return specs
@@ -114,6 +120,12 @@ def _merge(old: CollectionSchema, specs: list[dict[str, Any]]) -> tuple[dict, li
             merged["fields"].append(spec)
             added.append(spec["key"])
             continue
+        if current["type"] != spec["type"]:
+            raise InvalidSchema(f"{spec['key']!r} already exists as {current['type']}")
+        if current.get("hidden"):
+            raise InvalidSchema(
+                f"{spec['key']!r} was removed from this list and can't be added back"
+            )
         new_options = [o for o in spec.get("options", []) if o not in current["options"]]
         if current["type"] == "choice" and new_options:
             current["options"] += new_options
@@ -361,6 +373,7 @@ class DataService:
                 f"{key!r} is one of the bot's own collections; add records to it instead"
             )
         if own is not None:
+            version = own.schema_version
             merged, added = _merge(collection_schema(own), specs)
             if not added:
                 raise InvalidSchema(f"nothing new to add to {key!r}")
@@ -374,6 +387,7 @@ class DataService:
                 dict(own.title),
                 schema.model_dump(mode="json"),
                 own.id,
+                version,
                 added,
             )
         schema = _schema({"fields": specs})
@@ -395,6 +409,7 @@ class DataService:
             key,
             {lang: title_text},
             schema.model_dump(mode="json"),
+            None,
             None,
             [f.key for f in schema.fields],
         )
@@ -442,8 +457,12 @@ async def apply_definition(session: AsyncSession, pricing: Pricing, d: Definitio
             created_by=user,
         )
     space = await space_for(session, bot, user)
-    c = await collection_by_id(session, space, d.collection_id)
+    c = await lock_collection(session, space, d.collection_id)
     if c.created_by_user_id != user.id:
         raise NotAllowed("only the person's own collections can be changed in chat")
+    if c.schema_version != d.schema_version:
+        raise InvalidSchema("the list changed since this was proposed; ask again")
+    if (await get_collection(session, space, d.key)).id != c.id:
+        raise InvalidSchema("this list is no longer available")
     await update_collection_schema(session, c, schema)
     return c
