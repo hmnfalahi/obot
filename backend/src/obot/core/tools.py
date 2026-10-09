@@ -8,11 +8,12 @@ bot can tell the user what went wrong instead of failing the whole reply.
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import feedparser
 import httpx
 import trafilatura
+from pydantic import BaseModel
 from pydantic_ai import RunContext, Tool
 
 from obot.core.custom_api import API_TOOL, Endpoint, MissingKeys, request
@@ -33,6 +34,42 @@ class ToolMeter(Protocol):
         """Record one use of `kind`."""
 
 
+class DataTools(Protocol):
+    """A bot's collections for the person being helped; see obot.data.service."""
+
+    async def find(
+        self,
+        collection: str,
+        filters: list[dict[str, Any]] | None = None,
+        sort: str | None = None,
+        descending: bool = True,
+        limit: int = 20,
+        availability: bool = False,
+    ) -> str: ...
+
+    async def add(self, collection: str, data: dict[str, Any]) -> str: ...
+
+    async def update(self, collection: str, record_id: int, changes: dict[str, Any]) -> str: ...
+
+    async def delete(self, collection: str, record_id: int) -> str: ...
+
+    async def summarize(
+        self,
+        collection: str,
+        metric: str,
+        field: str | None = None,
+        filters: list[dict[str, Any]] | None = None,
+        group_by: str | None = None,
+        period: str | None = None,
+    ) -> str: ...
+
+
+class DataFilter(BaseModel):
+    field: str
+    op: Literal["eq", "ne", "lt", "lte", "gt", "gte", "contains", "in"]
+    value: Any = None
+
+
 @dataclass
 class ToolServices:
     http: httpx.AsyncClient
@@ -48,6 +85,8 @@ class ToolServices:
     api_keys: dict[str, str] = field(default_factory=dict, repr=False)
     # Asks the person to set missing keys (names) -> what to tell them; see call_api.
     ask_for_keys: Callable[[list[str]], Awaitable[str]] | None = None
+    # The bot's collections (data_* tools); None where data is not available (groups).
+    data: DataTools | None = None
 
 
 def page_text(result: FetchResult) -> str:
@@ -186,8 +225,77 @@ async def call_api(
     return text
 
 
+NO_DATA = "ERROR: data is not available here; the user can use it in a private chat."
+
+
+def _filters(filters: list[DataFilter] | None) -> list[dict[str, Any]] | None:
+    return [f.model_dump() for f in filters] if filters else None
+
+
+async def data_find(
+    ctx: RunContext[ToolServices],
+    collection: str,
+    filters: list[DataFilter] | None = None,
+    sort: str | None = None,
+    descending: bool = True,
+    limit: int = 20,
+    availability: bool = False,
+) -> str:
+    """Find records of a collection (newest first unless sorted by a field).
+
+    availability=true, for shared collections: what anyone has taken, public fields only.
+    """
+    if ctx.deps.data is None:
+        return NO_DATA
+    return await ctx.deps.data.find(
+        collection, _filters(filters), sort, descending, limit, availability
+    )
+
+
+async def data_add(ctx: RunContext[ToolServices], collection: str, data: dict[str, Any]) -> str:
+    """Save a new record in a collection; data maps field keys to values."""
+    if ctx.deps.data is None:
+        return NO_DATA
+    return await ctx.deps.data.add(collection, data)
+
+
+async def data_update(
+    ctx: RunContext[ToolServices], collection: str, record_id: int, changes: dict[str, Any]
+) -> str:
+    """Change some fields of a record (by its #id); null clears an optional field."""
+    if ctx.deps.data is None:
+        return NO_DATA
+    return await ctx.deps.data.update(collection, record_id, changes)
+
+
+async def data_delete(ctx: RunContext[ToolServices], collection: str, record_id: int) -> str:
+    """Delete a record (by its #id). The user confirms with a button; do not ask in words."""
+    if ctx.deps.data is None:
+        return NO_DATA
+    return await ctx.deps.data.delete(collection, record_id)
+
+
+async def data_summarize(
+    ctx: RunContext[ToolServices],
+    collection: str,
+    metric: Literal["count", "sum", "avg", "min", "max"],
+    field: str | None = None,
+    filters: list[DataFilter] | None = None,
+    group_by: str | None = None,
+    period: Literal["day", "week", "month"] | None = None,
+) -> str:
+    """Count records, or sum/avg/min/max a number field, optionally grouped by a field or by
+    day/week/month of the first date field."""
+    if ctx.deps.data is None:
+        return NO_DATA
+    return await ctx.deps.data.summarize(
+        collection, metric, field, _filters(filters), group_by, period
+    )
+
+
 DELEGATION_TOOL = "ask_bots"
 SCHEDULE_TOOL = "schedule_task"
+DATA_TOOLS = ("data_find", "data_add", "data_update", "data_delete", "data_summarize")
 
 TOOLS = {
     "web_search": Tool(web_search),
@@ -196,6 +304,11 @@ TOOLS = {
     DELEGATION_TOOL: Tool(ask_bot),
     SCHEDULE_TOOL: Tool(schedule_task),
     API_TOOL: Tool(call_api),
+    "data_find": Tool(data_find),
+    "data_add": Tool(data_add),
+    "data_update": Tool(data_update),
+    "data_delete": Tool(data_delete),
+    "data_summarize": Tool(data_summarize),
 }
 
 
@@ -205,15 +318,18 @@ def build_tools(
     apis: bool = False,
     delegation: bool = False,
     scheduling: bool = False,
+    data: bool = False,
 ) -> list[Tool[ToolServices]]:
     """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped.
 
     The rest are never configured per bot: `apis` (the bot has endpoints of its owner) adds
-    call_api, `delegation` (the person has other bots) ask_bot, and `scheduling` (a private
-    chat) schedule_task.
+    call_api, `delegation` (the person has other bots) ask_bot, `scheduling` (a private
+    chat) schedule_task, and `data` (the bot has collections here) the data_* tools.
     """
-    names = [t for t in enabled if t not in (DELEGATION_TOOL, SCHEDULE_TOOL)]
+    implicit = (DELEGATION_TOOL, SCHEDULE_TOOL, *DATA_TOOLS)
+    names = [t for t in enabled if t not in implicit]
     names += [API_TOOL] if apis else []
     names += [DELEGATION_TOOL] if delegation else []
     names += [SCHEDULE_TOOL] if scheduling else []
+    names += list(DATA_TOOLS) if data else []
     return [TOOLS[name] for name in dict.fromkeys(names) if name in TOOLS]

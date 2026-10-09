@@ -79,6 +79,16 @@ MESSAGES: dict[str, dict[str, str]] = {
             "a schedule, e.g. every morning; /tasks lists them."
         ),
         "btn.task_confirm": "✅ Confirm",
+        "data.shared_notice": (
+            "ℹ️ What you save here is visible to the owner of this bot (that's how bookings "
+            "and forms work). Your chats with the bot stay private."
+        ),
+        "data.delete_confirm": "🗑 Delete this from {collection}?\n{record}",
+        "btn.data_delete": "🗑 Delete",
+        "btn.data_keep": "Keep",
+        "data.deleted": "Deleted.",
+        "data.kept": "Kept.",
+        "data.not_yours": "You can't delete this.",
         "btn.task_cancel": "❌ Cancel",
         "task.confirmed": "✅ Scheduled: {summary} (next run: {when})",
         "task.cancelled": "Cancelled.",
@@ -217,6 +227,16 @@ MESSAGES: dict[str, dict[str, str]] = {
             "سر وقت برات انجام بدم، مثلاً هر روز صبح؛ /tasks فهرستشون رو نشون می‌ده."
         ),
         "btn.task_confirm": "✅ تأیید",
+        "data.shared_notice": (
+            "ℹ️ چیزهایی که این‌جا ثبت می‌کنی را صاحب این ربات می‌بیند (نوبت‌دهی و فرم‌ها "
+            "این‌طور کار می‌کنند). گفتگوهایت با ربات خصوصی می‌ماند."
+        ),
+        "data.delete_confirm": "🗑 این از «{collection}» حذف شود؟\n{record}",
+        "btn.data_delete": "🗑 حذف",
+        "btn.data_keep": "نگه دار",
+        "data.deleted": "حذف شد.",
+        "data.kept": "نگه داشته شد.",
+        "data.not_yours": "نمی‌توانی این را حذف کنی.",
         "btn.task_cancel": "❌ لغو",
         "task.confirmed": "✅ زمان‌بندی شد: {summary} (اجرای بعدی: {when})",
         "task.cancelled": "لغو شد.",
