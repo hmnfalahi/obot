@@ -380,6 +380,15 @@ export const api = {
     }),
   deleteRecord: (botId: number, collectionId: number, id: number) =>
     request<void>('DELETE', `/bots/${botId}/collections/${collectionId}/records/${id}`),
+  putSchema: (
+    botId: number,
+    collectionId: number,
+    body: { fields: FieldDef[]; rules: Rules; title?: Record<string, string>; version: number },
+  ) => request<DataCollection>('PUT', `/bots/${botId}/collections/${collectionId}/schema`, body),
+  putEvents: (botId: number, collectionId: number, events: CollectionEvents) =>
+    request<DataCollection>('PUT', `/bots/${botId}/collections/${collectionId}/events`, events),
+  exportLink: (botId: number, collectionId: number) =>
+    request<{ url: string; file_name: string }>('POST', `/bots/${botId}/collections/${collectionId}/export`),
   newBot: (body: NewBot) =>
     request<{ create_link: string; suggested_username: string }>('POST', '/bots/drafts', body),
 }
