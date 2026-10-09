@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from aiogram.exceptions import TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.methods import SendMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -106,7 +106,7 @@ async def test_people_who_left_are_skipped_not_retried(data_world) -> None:
     assert await outcomes(w) == [("create", "skipped")]
 
 
-async def test_blocked_bot_is_skipped_and_errors_are_retried(data_world) -> None:
+async def test_blocked_bot_is_skipped(data_world) -> None:
     w = data_world
     _, runtime = await setup(w)
     runtime.sender.send_text.side_effect = TelegramForbiddenError(
@@ -153,3 +153,106 @@ async def test_retention_job_purges_old_sent_events(data_world) -> None:
     await purge_records(async_sessionmaker(w.session.bind, expire_on_commit=False), 30)
 
     assert await outcomes(w) == []
+
+
+async def extra_event(w, c, recipient, kind="create", data=None) -> None:
+    w.session.add(
+        RecordEvent(
+            bot_id=w.bot.id,
+            collection_id=c.id,
+            record_id=1,
+            kind=kind,
+            recipient_user_id=recipient.id,
+            data=data or {"name": "Bob"},
+        )
+    )
+    await w.session.commit()
+
+
+async def test_one_failing_event_does_not_stop_or_resend_the_others(
+    data_world, monkeypatch
+) -> None:
+    from obot.telegram import data_events
+
+    w = data_world
+    c, runtime = await setup(w)
+    await extra_event(w, c, w.owner)
+    real = data_events.record_lines
+    calls = []
+
+    def flaky(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("broken")
+        return real(*args)
+
+    monkeypatch.setattr(data_events, "record_lines", flaky)
+    now = datetime.now(UTC)
+
+    assert await deliver_data_events(runtime, now=now) == 1
+    assert await deliver_data_events(runtime, now=now) == 0
+    assert runtime.sender.send_text.await_count == 1
+    assert await outcomes(w) == [("create", None), ("create", "sent")]
+
+
+async def test_a_crash_after_a_success_keeps_it_marked_sent(data_world, monkeypatch) -> None:
+    from obot.telegram import data_events
+
+    w = data_world
+    c, runtime = await setup(w)
+    await extra_event(w, c, w.owner)
+    real = data_events.record_lines
+    calls = []
+
+    def second_raises(*args):
+        calls.append(1)
+        if len(calls) == 2:
+            raise ValueError("boom")
+        return real(*args)
+
+    monkeypatch.setattr(data_events, "record_lines", second_raises)
+    assert await deliver_data_events(runtime) == 1
+    assert await outcomes(w) == [("create", "sent"), ("create", None)]
+
+
+async def test_people_who_can_no_longer_use_a_private_bot_are_skipped(data_world) -> None:
+    w = data_world
+    c, runtime = await setup(w)
+    w.bot.visibility = BotVisibility.PRIVATE
+    await extra_event(w, c, w.alice)
+
+    assert await deliver_data_events(runtime) == 1  # the owner's only
+    assert await outcomes(w) == [("create", "sent"), ("create", "skipped")]
+
+
+async def test_unreachable_chats_are_skipped(data_world) -> None:
+    w = data_world
+    _, runtime = await setup(w)
+    runtime.sender.send_text.side_effect = TelegramBadRequest(
+        method=SendMessage(chat_id=1, text="x"), message="Bad Request: chat not found"
+    )
+    await deliver_data_events(runtime)
+    assert await outcomes(w) == [("create", "skipped")]
+
+
+async def test_update_template_and_personal_timezone(data_world) -> None:
+    w = data_world
+    _, runtime = await setup(w)
+    p = await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="visits",
+        title={"en": "Visits"},
+        scope=CollectionScope.PERSONAL,
+        schema=CollectionSchema.model_validate(
+            {"fields": [{"key": "at", "label": {"en": "At"}, "type": "datetime"}]}
+        ),
+    )
+    w.alice.timezone = "Asia/Tokyo"
+    w.alice.language = "en"
+    await extra_event(w, p, w.alice, kind="update", data={"at": "2030-01-10T00:00:00Z"})
+    await deliver_data_events(runtime)
+
+    texts = [c.args[2] for c in runtime.sender.send_text.await_args_list]
+    assert "✏️ Changed in «Visits»:\nAt: 2030-01-10 09:00" in texts
