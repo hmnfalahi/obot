@@ -24,11 +24,12 @@ from obot.data.repository import (
     was_deleted,
 )
 from obot.data.schema import FieldDef
-from obot.data.service import Definition, apply_definition
+from obot.data.service import Definition, GroupChat, apply_definition
 from obot.data.space import space_for
 from obot.db.models import Bot as BotRecord
 from obot.db.models import Collection, CollectionScope, Record, User
 from obot.i18n import lang_of, t
+from obot.telegram.group_access import group_role
 from obot.telegram.runtime import Runtime
 
 log = logging.getLogger(__name__)
@@ -68,9 +69,16 @@ class DeleteConfirmer:
     """Shows a person a record with Delete/Keep buttons; only the button deletes it."""
 
     def __init__(
-        self, runtime: Runtime, bot: BotRecord, user: User, *, owner_timezone: str | None = None
+        self,
+        runtime: Runtime,
+        bot: BotRecord,
+        user: User,
+        *,
+        owner_timezone: str | None = None,
+        group: GroupChat | None = None,
     ) -> None:
         self._runtime = runtime
+        self._group = group
         self._tg_bot_id = bot.tg_bot_id
         self._tg_user_id = user.tg_user_id
         self._timezone = user.timezone
@@ -86,7 +94,8 @@ class DeleteConfirmer:
         if client is None:
             return "ERROR: cannot ask the user to confirm right now; try again later."
         lang = self._lang
-        data = f"{c.id}:{record.id}"
+        group = self._group
+        data = f"{c.id}:{record.id}" + (f":{group.tg_chat_id}" if group else "")
         buttons = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -99,15 +108,26 @@ class DeleteConfirmer:
                 ]
             ]
         )
-        text = t(
-            lang,
-            "data.delete_confirm",
-            collection=_title(c, lang),
-            record=record_text(c, record, lang, self._tz(c)),
-        )
+        record_shown = record_text(c, record, lang, self._tz(c))
+        if group is not None:
+            text = t(
+                lang,
+                "data.delete_confirm_group",
+                collection=_title(c, lang),
+                group=group.title or "—",
+                record=record_shown,
+            )
+        else:
+            text = t(lang, "data.delete_confirm", collection=_title(c, lang), record=record_shown)
         await self._runtime.sender.send_text(
             client, self._tg_user_id, text, group=False, buttons=buttons
         )
+        if group is not None:
+            return (
+                f"The user was sent record #{record.id} in their private chat with you, with "
+                "Delete and Keep buttons. Tell them in one short sentence to confirm there; it "
+                "is not deleted yet."
+            )
         return (
             f"The user was shown record #{record.id} with Delete and Keep buttons. Tell them "
             "in one short sentence to confirm there; it is not deleted yet."
@@ -129,10 +149,17 @@ async def on_data_button(
 ) -> None:
     lang = lang_of(query.from_user.language_code)
     parts = query.data.split(":")
-    if len(parts) != 4 or not (parts[2].isdecimal() and parts[3].isdecimal()):
+    if len(parts) not in (4, 5) or not (parts[2].isdecimal() and parts[3].isdecimal()):
         await query.answer()
         return
-    _, action, collection_id, record_id = parts
+    chat_id = None
+    if len(parts) == 5:
+        raw = parts[4]
+        if not (raw.startswith("-") and raw[1:].isdecimal() and 1 <= int(raw[1:]) <= MAX_ID):
+            await query.answer()
+            return
+        chat_id = int(raw)
+    action, collection_id, record_id = parts[1], parts[2], parts[3]
     if not (1 <= int(collection_id) <= MAX_ID and 1 <= int(record_id) <= MAX_ID):
         await query.answer()
         return
@@ -146,7 +173,20 @@ async def on_data_button(
     try:
         if user is None or not can_use(bot_record, query.from_user.id):
             raise DataError("not a user of this bot")
-        space = await space_for(session, bot_record, user)
+        if chat_id is None:
+            space = await space_for(session, bot_record, user)
+        else:
+            # Always asked fresh: the button may be pressed long after the card was sent.
+            try:
+                role = await group_role(query.bot, chat_id, query.from_user.id)
+            except TelegramAPIError:
+                role = None
+            if role is None:
+                await query.answer(t(lang, "data.not_in_group"), show_alert=True)
+                return
+            space = await space_for(
+                session, bot_record, user, tg_chat_id=chat_id, is_group_admin=role.is_admin
+            )
         c = await collection_by_id(session, space, int(collection_id))
         await delete_record(session, space, c, int(record_id))
     except RecordNotFound:

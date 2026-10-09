@@ -131,6 +131,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "and forms work). Your chats with the bot stay private."
         ),
         "data.delete_confirm": "🗑 Delete this from {collection}?\n{record}",
+        "data.delete_confirm_group": "🗑 Delete this from {collection} in {group}?\n{record}",
+        "data.not_in_group": "You're no longer in that group.",
         "btn.data_delete": "🗑 Delete",
         "btn.data_keep": "Keep",
         "data.deleted": "Deleted.",
@@ -364,6 +366,8 @@ MESSAGES: dict[str, dict[str, str]] = {
             "این‌طور کار می‌کنند). گفتگوهایت با ربات خصوصی می‌ماند."
         ),
         "data.delete_confirm": "🗑 این از «{collection}» حذف شود؟\n{record}",
+        "data.delete_confirm_group": "🗑 این از «{collection}» در گروه «{group}» حذف شود؟\n{record}",
+        "data.not_in_group": "دیگر عضو آن گروه نیستی.",
         "btn.data_delete": "🗑 حذف",
         "btn.data_keep": "نگه دار",
         "data.deleted": "حذف شد.",
