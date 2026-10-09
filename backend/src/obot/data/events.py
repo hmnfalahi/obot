@@ -8,9 +8,16 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from obot.data.schema import CollectionEvents, CollectionSchema, FieldType, RemindRule
+from obot.data.schema import (
+    CollectionEvents,
+    CollectionSchema,
+    FieldType,
+    RemindRule,
+    remind_fits,
+)
 from obot.db.models import (
     Collection,
     CollectionScope,
@@ -32,19 +39,28 @@ def _schema(c: Collection) -> CollectionSchema:
     return CollectionSchema.model_validate({"fields": c.schema["fields"], "rules": c.rules})
 
 
-def moment_of(rule: RemindRule, data: dict, schema: CollectionSchema, tz: ZoneInfo):
-    """The record's moment for a remind rule, or None when it has no date."""
+def moment_of(
+    rule: RemindRule, data: dict, schema: CollectionSchema, tz: ZoneInfo
+) -> datetime | None:
+    """The record's moment for a remind rule, or None when it has no usable date (also when
+    the rule no longer fits the schema or a stored value does not parse)."""
+    if not remind_fits(rule, schema):
+        return None
     raw = data.get(rule.date_field)
     if raw is None:
         return None
-    if schema.field(rule.date_field).type == FieldType.DATETIME:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    at = DATE_ONLY_AT
-    if rule.time_field is not None:
-        if data.get(rule.time_field) is None:
-            return None
-        at = time.fromisoformat(data[rule.time_field])
-    return datetime.combine(date.fromisoformat(raw), at, tzinfo=tz).astimezone(UTC)
+    try:
+        if schema.field(rule.date_field).type == FieldType.DATETIME:
+            moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return moment.astimezone(UTC) if moment.tzinfo else None
+        at = DATE_ONLY_AT
+        if rule.time_field is not None:
+            if data.get(rule.time_field) is None:
+                return None
+            at = time.fromisoformat(data[rule.time_field])
+        return datetime.combine(date.fromisoformat(raw), at, tzinfo=tz).astimezone(UTC)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def _recipient(owner_id: int, record: Record, to: str) -> int:
@@ -59,23 +75,55 @@ async def _schedule(
     tz: ZoneInfo,
     now: datetime,
 ) -> None:
-    await session.execute(delete(RecordReminder).where(RecordReminder.record_id == record.id))
+    """Bring the record's reminders in line with the collection's remind rules. Sent rows
+    stay sent unless their time changes; a due row the job has not claimed yet is kept."""
+    rules = collection_events(c).remind
     schema = _schema(c)
-    for i, rule in enumerate(collection_events(c).remind):
-        moment = moment_of(rule, record.data, schema, tz)
-        if moment is None:
-            continue
-        fire_at = moment - timedelta(minutes=rule.before_minutes)
-        if fire_at <= now:
-            continue
-        session.add(
-            RecordReminder(
-                record_id=record.id,
-                collection_id=c.id,
-                rule=i,
-                recipient_user_id=_recipient(owner_id, record, rule.to),
-                fire_at=fire_at,
+    stored = {
+        row.rule: row
+        for row in await session.execute(
+            select(RecordReminder.rule, RecordReminder.fire_at, RecordReminder.sent_at).where(
+                RecordReminder.record_id == record.id
             )
+        )
+    }
+    unsent = RecordReminder.sent_at.is_(None)
+    await session.execute(
+        delete(RecordReminder).where(
+            RecordReminder.record_id == record.id, RecordReminder.rule >= len(rules), unsent
+        )
+    )
+    for i, rule in enumerate(rules):
+        moment = moment_of(rule, record.data, schema, tz)
+        fire_at = None if moment is None else moment - timedelta(minutes=rule.before_minutes)
+        if fire_at is None or fire_at <= now:
+            old = stored.get(i)
+            if old is not None and old.sent_at is None and old.fire_at != fire_at:
+                await session.execute(
+                    delete(RecordReminder).where(
+                        RecordReminder.record_id == record.id, RecordReminder.rule == i, unsent
+                    )
+                )
+            continue
+        stmt = insert(RecordReminder).values(
+            record_id=record.id,
+            collection_id=c.id,
+            rule=i,
+            recipient_user_id=_recipient(owner_id, record, rule.to),
+            fire_at=fire_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[RecordReminder.record_id, RecordReminder.rule],
+            set_={
+                "fire_at": stmt.excluded.fire_at,
+                "recipient_user_id": stmt.excluded.recipient_user_id,
+                "sent_at": None,
+            },
+            where=RecordReminder.sent_at.is_(None)
+            | (stmt.excluded.fire_at != RecordReminder.fire_at),
+        )
+        await session.scalars(
+            stmt.returning(RecordReminder), execution_options={"populate_existing": True}
         )
 
 
@@ -120,13 +168,25 @@ async def reschedule_collection(
     session: AsyncSession, c: Collection, owner: User, now: datetime
 ) -> None:
     """Recompute reminders of every live record after the collection's events changed."""
+    rules = collection_events(c).remind
+    unsent = RecordReminder.sent_at.is_(None)
+    await session.execute(
+        delete(RecordReminder).where(
+            RecordReminder.collection_id == c.id, RecordReminder.rule >= len(rules), unsent
+        )
+    )
+    if not rules:
+        return
     records = await session.scalars(
         select(Record).where(Record.collection_id == c.id, Record.deleted_at.is_(None))
     )
-    for record in records:
+    zones: dict[int, ZoneInfo] = {}
+    for record in list(records):
         if c.scope == CollectionScope.PERSONAL:
-            author = await session.get(User, record.author_user_id)
-            tz = ZoneInfo(author.timezone)
+            if record.author_user_id not in zones:
+                author = await session.get(User, record.author_user_id)
+                zones[record.author_user_id] = ZoneInfo(author.timezone)
+            tz = zones[record.author_user_id]
         else:
             tz = ZoneInfo(owner.timezone)
         await _schedule(session, c, record, owner.id, tz, now)

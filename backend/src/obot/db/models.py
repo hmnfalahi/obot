@@ -280,7 +280,9 @@ class RecordEvent(Base):
     # No foreign key: a deleted record may be purged before its message is sent.
     record_id: Mapped[int | None] = mapped_column(BigInteger)
     kind: Mapped[str] = mapped_column(String(16))  # create | update | delete | remind
-    recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    recipient_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     actor_user_id: Mapped[int | None] = mapped_column(BigInteger)
     data: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -306,7 +308,9 @@ class RecordReminder(Base):
         ForeignKey("collections.id", ondelete="CASCADE"), index=True
     )
     rule: Mapped[int]  # index into the collection's remind rules
-    recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    recipient_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     fire_at: Mapped[datetime]
     sent_at: Mapped[datetime | None]
 
