@@ -13,9 +13,11 @@ from obot.bots.access import can_use
 from obot.bots.byok import reply_model
 from obot.bots.users import has_started, user_bots
 from obot.chat.history import ChatScope, record_message
+from obot.chat.membership import get_membership
 from obot.core.agent import BotProfile, generate_reply
 from obot.core.byok import failure_of
 from obot.core.fetch import truncate
+from obot.data.service import GroupChat
 from obot.db.models import Bot as BotRecord
 from obot.db.models import SenderKind, Task, User
 from obot.i18n import lang_of, t
@@ -104,6 +106,22 @@ def delivers_to_group(scope: ChatScope) -> bool:
     return scope.tg_chat_id is not None and scope.tg_chat_id < 0
 
 
+GROUP_CHAT_TYPES = ("group", "supergroup")
+
+
+async def _always_admin() -> bool:
+    return True
+
+
+async def task_group(session, bot_id: int, chat_id: int) -> GroupChat | None:
+    """A task posting to a group works on that group's records. Its user was just checked
+    to be an admin there (_cannot_run). Channels have no group data."""
+    membership = await get_membership(session, bot_id, chat_id)
+    if membership is None or membership.chat_type not in GROUP_CHAT_TYPES:
+        return None
+    return GroupChat(chat_id, _always_admin, title=membership.title)
+
+
 async def _run_step(
     session,
     runtime: Runtime,
@@ -124,7 +142,10 @@ async def _run_step(
     chosen = await reply_model(
         session, runtime.models, runtime.cipher, runtime.pricing, bot_record, payer
     )
-    # Another bot doing a step works like ask_bot: it cannot delegate further.
+    to_group = delivers_to_group(scope)
+    group = await task_group(session, bot_record.id, scope.tg_chat_id) if to_group and own else None
+    # Another bot doing a step works like ask_bot: it cannot delegate further, and from a
+    # group it gets no data.
     kit = await toolkit(
         session,
         runtime,
@@ -132,7 +153,8 @@ async def _run_step(
         started,
         payer,
         delegation=own,
-        data=not delivers_to_group(scope),
+        data=not to_group or group is not None,
+        group=group,
     )
     reply = await generate_reply(
         chosen.model,

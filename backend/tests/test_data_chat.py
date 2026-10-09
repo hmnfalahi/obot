@@ -270,8 +270,23 @@ def test_tasks_to_groups_get_no_data() -> None:
     assert not delivers_to_group(SimpleNamespace(tg_chat_id=2002))
 
 
-async def test_run_step_leaves_data_out_for_group_scope(monkeypatch) -> None:
+async def test_run_step_uses_the_groups_data_for_the_tasks_own_bot(data_world, monkeypatch) -> None:
+    from obot.chat.membership import upsert_membership
     from obot.telegram import task_runner
+
+    w = data_world
+    await upsert_membership(
+        w.session,
+        w.bot.id,
+        -100,
+        chat_type="supergroup",
+        title="Family",
+        is_member=True,
+        is_admin=True,
+    )
+    await upsert_membership(
+        w.session, w.bot.id, -300, chat_type="channel", title="News", is_member=True, is_admin=True
+    )
 
     class Stop(Exception):
         pass
@@ -279,29 +294,34 @@ async def test_run_step_leaves_data_out_for_group_scope(monkeypatch) -> None:
     seen = {}
 
     async def fake_toolkit(*args, **kwargs):
+        seen.clear()
         seen.update(kwargs)
         raise Stop
 
     monkeypatch.setattr(task_runner, "toolkit", fake_toolkit)
     monkeypatch.setattr(task_runner, "reply_model", AsyncMock(return_value=None))
-    bot = SimpleNamespace(tools=[])
-    for chat_id, expected in ((-100, False), (5, True)):
-        scope = SimpleNamespace(tg_chat_id=chat_id)
+    runtime = SimpleNamespace(pricing=None, models=None, cipher=None)
+
+    async def run(chat_id: int, own: bool) -> dict:
+        scope = SimpleNamespace(tg_chat_id=chat_id, bot_id=w.bot.id)
         try:
             await task_runner._run_step(
-                None,
-                SimpleNamespace(pricing=None, models=None, cipher=None),
-                bot,
-                None,
-                True,
-                "p",
-                None,
-                scope,
-                "q",
+                w.session, runtime, w.bot, w.alice, own, "p", None, scope, "q"
             )
         except Stop:
             pass
-        assert seen["data"] is expected
+        return dict(seen)
+
+    own_group = await run(-100, True)
+    assert own_group["data"] is True and own_group["group"].tg_chat_id == -100
+    assert await own_group["group"].is_admin() is True  # _cannot_run checked it
+    assert own_group["group"].title == "Family"
+    other_bot = await run(-100, False)
+    assert other_bot["data"] is False and other_bot.get("group") is None
+    channel = await run(-300, True)
+    assert channel["data"] is False and channel.get("group") is None
+    private = await run(2002, True)
+    assert private["data"] is True and private.get("group") is None
 
 
 def alerted(client) -> bool:
