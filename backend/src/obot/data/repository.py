@@ -20,7 +20,7 @@ from obot.data.errors import (
     RecordNotFound,
     StaleRecord,
 )
-from obot.data.events import on_record_change, reschedule_collection
+from obot.data.events import collection_events, on_record_change, reschedule_collection
 from obot.data.schema import (
     KEY_PATTERN,
     CollectionEvents,
@@ -28,6 +28,7 @@ from obot.data.schema import (
     check_allowed_hours,
     check_events,
     check_evolution,
+    fit_events,
     unique_keys,
     validate_record,
 )
@@ -195,6 +196,13 @@ async def update_collection_schema(
     check_evolution(collection_schema(c), new, has_records=has_records)
     _store_schema(c, new)
     c.schema_version += 1
+    events = collection_events(c)
+    fitted = fit_events(events, new, c.scope)
+    if fitted != events:
+        # Rules on fields that are gone or retyped are dropped rather than refused.
+        c.events = fitted.model_dump(mode="json")
+        if fitted.remind != events.remind:
+            await reschedule_collection(session, c, await _owner(session, c), datetime.now(UTC))
     kept = [",".join(group) for group in new.rules.unique]
     await session.execute(
         delete(RecordKey).where(RecordKey.collection_id == c.id, RecordKey.rule.not_in(kept))
@@ -403,7 +411,10 @@ async def set_collection_events(
     reminders. Callers check that the caller may edit the collection."""
     check_events(events, collection_schema(c), c.scope)
     c.events = events.model_dump(mode="json")
-    owner = await session.scalar(
+    await reschedule_collection(session, c, await _owner(session, c), datetime.now(UTC))
+
+
+async def _owner(session: AsyncSession, c: Collection) -> User:
+    return await session.scalar(
         select(User).join(Bot, Bot.owner_id == User.id).where(Bot.id == c.bot_id)
     )
-    await reschedule_collection(session, c, owner, datetime.now(UTC))

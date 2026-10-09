@@ -404,6 +404,21 @@ class CollectionEvents(BaseModel):
     remind: list[RemindRule] = Field(default=[], max_length=3)
 
 
+def remind_fits(rule: RemindRule, schema: CollectionSchema) -> bool:
+    """Whether the rule names a date or datetime field, or a date and a time field."""
+    fields = schema.field_map()
+    day = fields.get(rule.date_field)
+    if rule.time_field is None:
+        return day is not None and day.type in (FieldType.DATE, FieldType.DATETIME)
+    at = fields.get(rule.time_field)
+    return (
+        day is not None
+        and day.type == FieldType.DATE
+        and at is not None
+        and at.type == FieldType.TIME
+    )
+
+
 def check_events(
     events: CollectionEvents, schema: CollectionSchema, scope: CollectionScope
 ) -> None:
@@ -411,20 +426,18 @@ def check_events(
     rules = [*events.notify, *events.remind]
     if scope != CollectionScope.SHARED and any(r.to == "owner" for r in rules):
         raise InvalidSchema("only shared collections can notify the owner")
-    fields = schema.field_map()
-    for r in events.remind:
-        day = fields.get(r.date_field)
-        if r.time_field is None:
-            ok = day is not None and day.type in (FieldType.DATE, FieldType.DATETIME)
-        else:
-            at = fields.get(r.time_field)
-            ok = (
-                day is not None
-                and day.type == FieldType.DATE
-                and at is not None
-                and at.type == FieldType.TIME
-            )
-        if not ok:
-            raise InvalidSchema(
-                "a reminder needs a date or datetime field, or a date and a time field"
-            )
+    if not all(remind_fits(r, schema) for r in events.remind):
+        raise InvalidSchema("a reminder needs a date or datetime field, or a date and a time field")
+
+
+def fit_events(
+    events: CollectionEvents, schema: CollectionSchema, scope: CollectionScope
+) -> CollectionEvents:
+    """The rules that still hold after a schema change; the others are dropped."""
+    owner_ok = scope == CollectionScope.SHARED
+    return CollectionEvents(
+        notify=[r for r in events.notify if owner_ok or r.to != "owner"],
+        remind=[
+            r for r in events.remind if (owner_ok or r.to != "owner") and remind_fits(r, schema)
+        ],
+    )

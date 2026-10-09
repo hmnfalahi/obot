@@ -203,3 +203,104 @@ async def test_changing_events_reschedules_existing_records(data_world) -> None:
 
     [rem] = list(await w.session.scalars(select(RecordReminder)))
     assert rem.recipient_user_id == w.alice.id
+
+
+async def reminder(session) -> RecordReminder | None:
+    return await session.scalar(select(RecordReminder).execution_options(populate_existing=True))
+
+
+async def test_due_unclaimed_reminder_survives_an_unrelated_edit(data_world) -> None:
+    from zoneinfo import ZoneInfo
+
+    w = data_world
+    c = await bookings(w)
+    alice = await w.space(w.alice)
+    # The booking is in two hours, so its day-before reminder fell due while the job had
+    # not run yet (as if it had been scheduled earlier).
+    local = (datetime.now(UTC) + timedelta(hours=2)).astimezone(ZoneInfo("Asia/Tehran"))
+    day, at = local.date().isoformat(), local.strftime("%H:%M")
+    r = await add_record(w.session, w.pricing, alice, c, {"name": "Alice", "date": day, "time": at})
+    moment = datetime.combine(local.date(), local.time().replace(second=0, microsecond=0))
+    fire_at = moment.replace(tzinfo=ZoneInfo("Asia/Tehran")) - timedelta(days=1)
+    w.session.add(
+        RecordReminder(
+            record_id=r.id,
+            collection_id=c.id,
+            rule=0,
+            recipient_user_id=w.alice.id,
+            fire_at=fire_at,
+        )
+    )
+    await w.session.flush()
+
+    await update_record(w.session, w.pricing, alice, c, r.id, {"name": "Alice B"})
+    await set_collection_events(w.session, c, EVENTS)
+
+    assert await claim_due_reminders(w.session, datetime.now(UTC)) == 1
+
+
+async def test_sent_reminder_is_not_resent_after_an_unrelated_edit(data_world) -> None:
+    w = data_world
+    c = await bookings(w)
+    alice = await w.space(w.alice)
+    r = await add_record(
+        w.session, w.pricing, alice, c, {"name": "Alice", "date": FAR, "time": "17:00"}
+    )
+    assert await claim_due_reminders(w.session, datetime(2030, 1, 9, 14, 0, tzinfo=UTC)) == 1
+
+    await update_record(w.session, w.pricing, alice, c, r.id, {"name": "Alice B"})
+    await set_collection_events(w.session, c, EVENTS)
+
+    rem = await reminder(w.session)
+    assert rem.sent_at is not None
+    assert await claim_due_reminders(w.session, datetime(2030, 1, 9, 14, 0, tzinfo=UTC)) == 0
+
+
+async def test_sent_reminder_is_armed_again_when_the_date_moves(data_world) -> None:
+    w = data_world
+    c = await bookings(w)
+    alice = await w.space(w.alice)
+    r = await add_record(
+        w.session, w.pricing, alice, c, {"name": "Alice", "date": FAR, "time": "17:00"}
+    )
+    assert await claim_due_reminders(w.session, datetime(2030, 1, 9, 14, 0, tzinfo=UTC)) == 1
+
+    await update_record(w.session, w.pricing, alice, c, r.id, {"date": "2030-02-10"})
+
+    rem = await reminder(w.session)
+    assert rem.sent_at is None
+    assert rem.fire_at == datetime(2030, 2, 9, 13, 30, tzinfo=UTC)
+
+
+async def test_schema_change_drops_reminders_that_no_longer_fit(data_world) -> None:
+    from obot.data.events import collection_events
+    from obot.data.repository import update_collection_schema
+
+    w = data_world
+    c = await bookings(w)
+    dateless = CollectionSchema.model_validate(
+        {"fields": [{"key": "name", "label": {"en": "Name"}, "type": "text", "required": True}]}
+    )
+    await update_collection_schema(w.session, c, dateless)
+
+    events = collection_events(c)
+    assert events.remind == [] and len(events.notify) == 3
+    await add_record(w.session, w.pricing, await w.space(w.alice), c, {"name": "Alice"})
+    assert await reminder(w.session) is None
+
+
+async def test_reminder_on_a_field_that_does_not_fit_is_ignored(data_world) -> None:
+    w = data_world
+    c = await bookings(w, events=CollectionEvents())
+    # Stored by an older version or by hand: a reminder on a text field.
+    c.events = {"remind": [{"date_field": "name", "before_minutes": 60}]}
+    await w.session.flush()
+
+    await add_record(
+        w.session,
+        w.pricing,
+        await w.space(w.alice),
+        c,
+        {"name": "Alice", "date": FAR, "time": "17:00"},
+    )
+    assert await reminder(w.session) is None
