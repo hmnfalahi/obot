@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.bots.access import can_use
 from obot.bots.users import started_user
+from obot.data.describe import field_text, label_of
 from obot.data.errors import DataError, RecordNotFound
 from obot.data.format import describe_error
 from obot.data.repository import (
@@ -188,44 +189,11 @@ async def on_data_button(
 
 DEFINE_TTL = 24 * 3600
 
-TYPE_NAMES = {
-    "en": {
-        "text": "text",
-        "number": "number",
-        "money": "amount",
-        "date": "date",
-        "time": "time",
-        "datetime": "date and time",
-        "choice": "choice",
-        "boolean": "yes/no",
-        "phone": "phone",
-    },
-    "fa": {
-        "text": "متن",
-        "number": "عدد",
-        "money": "مبلغ",
-        "date": "تاریخ",
-        "time": "ساعت",
-        "datetime": "تاریخ و ساعت",
-        "choice": "انتخابی",
-        "boolean": "بله/خیر",
-        "phone": "تلفن",
-    },
-}
-
 
 def definition_text(d: Definition, lang: str) -> str:
     fields = {f["key"]: f for f in d.schema["fields"]}
-    lines = []
-    for key in d.added:
-        f = fields[key]
-        label = f["label"].get(lang) or next(iter(f["label"].values()), key)
-        kind = TYPE_NAMES[lang].get(f["type"], f["type"])
-        if f.get("options"):
-            separator = "، " if lang == "fa" else ", "
-            kind += ": " + separator.join(f["options"])
-        lines.append(f"• {label} ({kind})")
-    title = d.title.get(lang) or next(iter(d.title.values()), d.key)
+    lines = [f"• {field_text(FieldDef.model_validate(fields[key]), lang)}" for key in d.added]
+    title = label_of(d.title, lang, d.key)
     template = "data.define_new" if d.collection_id is None else "data.define_add"
     return t(lang, template, title=title, fields="\n".join(lines))
 
