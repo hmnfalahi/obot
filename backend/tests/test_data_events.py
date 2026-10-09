@@ -10,6 +10,7 @@ from obot.data.events import (
     mark_done,
     mark_failed,
     pending_events,
+    reschedule_collection,
 )
 from obot.data.repository import (
     add_record,
@@ -304,3 +305,150 @@ async def test_reminder_on_a_field_that_does_not_fit_is_ignored(data_world) -> N
         {"name": "Alice", "date": FAR, "time": "17:00"},
     )
     assert await reminder(w.session) is None
+
+
+async def remind_events(session) -> list[RecordEvent]:
+    return list(await session.scalars(select(RecordEvent).where(RecordEvent.kind == "remind")))
+
+
+async def test_a_reminder_claimed_after_the_booking_is_dropped(data_world) -> None:
+    w = data_world
+    c = await bookings(w)
+    await add_record(
+        w.session,
+        w.pricing,
+        await w.space(w.alice),
+        c,
+        {"name": "Alice", "date": FAR, "time": "17:00"},
+    )
+    # The job was down: the booking (13:30 UTC on the 10th) has passed before it ran.
+    after = datetime(2030, 1, 10, 14, 0, tzinfo=UTC)
+
+    assert await claim_due_reminders(w.session, after) == 1
+    assert await remind_events(w.session) == []
+    assert (await reminder(w.session)).sent_at == after
+    assert await claim_due_reminders(w.session, after) == 0
+
+
+async def test_a_reminder_at_the_time_is_still_sent_just_after_it(data_world) -> None:
+    w = data_world
+    at_the_time = CollectionEvents.model_validate(
+        {"remind": [{"date_field": "date", "time_field": "time", "before_minutes": 0}]}
+    )
+    c = await bookings(w, events=at_the_time)
+    await add_record(
+        w.session,
+        w.pricing,
+        await w.space(w.alice),
+        c,
+        {"name": "Alice", "date": FAR, "time": "17:00"},
+    )
+
+    assert await claim_due_reminders(w.session, datetime(2030, 1, 10, 13, 31, tzinfo=UTC)) == 1
+    assert len(await remind_events(w.session)) == 1
+
+
+async def test_a_personal_reminder_uses_the_authors_zone_when_claimed(data_world) -> None:
+    w = data_world
+    c = await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="visits",
+        title={"en": "Visits"},
+        scope=CollectionScope.PERSONAL,
+        schema=BOOKINGS,
+    )
+    await set_collection_events(
+        w.session,
+        c,
+        CollectionEvents.model_validate(
+            {"remind": [{"date_field": "date", "time_field": "time", "before_minutes": 60}]}
+        ),
+    )
+    w.alice.timezone = "Asia/Tokyo"  # 17:00 there is 08:00 UTC
+    await add_record(
+        w.session,
+        w.pricing,
+        await w.space(w.alice),
+        c,
+        {"name": "Alice", "date": FAR, "time": "17:00"},
+    )
+    # 10:00 UTC is before the booking in Tehran but after it in Tokyo.
+    assert await claim_due_reminders(w.session, datetime(2030, 1, 10, 10, 0, tzinfo=UTC)) == 1
+    assert await remind_events(w.session) == []
+
+
+async def test_rescheduling_leaves_past_records_alone(data_world) -> None:
+    w = data_world
+    c = await bookings(w, events=CollectionEvents())
+    alice = await w.space(w.alice)
+    old = await add_record(
+        w.session, w.pricing, alice, c, {"name": "Old", "date": "2020-01-01", "time": "10:00"}
+    )
+    await add_record(w.session, w.pricing, alice, c, {"name": "New", "date": FAR, "time": "17:00"})
+    # A row an older rule left on the past record: rescheduling would have removed it.
+    stale = datetime(2019, 12, 1, tzinfo=UTC)
+    w.session.add(
+        RecordReminder(
+            record_id=old.id,
+            collection_id=c.id,
+            rule=0,
+            recipient_user_id=w.alice.id,
+            fire_at=stale,
+        )
+    )
+    await w.session.flush()
+
+    await set_collection_events(w.session, c, EVENTS)
+
+    expected = [(True, stale), (False, datetime(2030, 1, 9, 13, 30, tzinfo=UTC))]
+    assert await reminder_rows(w.session, old.id) == expected
+    # Rescheduling again with the same rules changes nothing.
+    await reschedule_collection(w.session, c, w.owner, datetime.now(UTC))
+    assert await reminder_rows(w.session, old.id) == expected
+
+
+async def reminder_rows(session, past_id: int) -> list[tuple[bool, datetime]]:
+    rows = await session.scalars(
+        select(RecordReminder)
+        .order_by(RecordReminder.record_id)
+        .execution_options(populate_existing=True)
+    )
+    return [(r.record_id == past_id, r.fire_at) for r in rows if r.sent_at is None]
+
+
+async def test_owners_are_never_told_about_personal_records(data_world) -> None:
+    w = data_world
+    c = await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="notes",
+        title={"en": "Notes"},
+        scope=CollectionScope.PERSONAL,
+        schema=BOOKINGS,
+    )
+    # Stored by an older version or by hand; check_events refuses it.
+    c.events = {"notify": [{"on": "create", "to": "owner"}]}
+    await w.session.flush()
+
+    await add_record(w.session, w.pricing, await w.space(w.alice), c, {"name": "Alice"})
+    assert await events_of(w.session) == []
+
+
+async def test_an_edit_that_changes_nothing_tells_nobody(data_world) -> None:
+    w = data_world
+    c = await bookings(w)
+    r = await add_record(
+        w.session,
+        w.pricing,
+        await w.space(w.alice),
+        c,
+        {"name": "Alice", "date": FAR, "time": "17:00"},
+    )
+    owner = await w.space(w.owner)
+
+    await update_record(w.session, w.pricing, owner, c, r.id, {"time": "17:00"})
+
+    assert await events_of(w.session) == [("create", w.owner.id)]
