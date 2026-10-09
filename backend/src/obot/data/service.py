@@ -8,9 +8,11 @@ are held while the model is thinking, and a booking is saved even if the reply f
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -19,6 +21,7 @@ from obot.data.errors import (
     CollectionNotFound,
     DataError,
     InvalidQuery,
+    InvalidSchema,
     NotAllowed,
     RecordNotFound,
 )
@@ -34,17 +37,89 @@ from obot.data.query import availability as find_taken
 from obot.data.repository import (
     MAX_ID,
     add_record,
+    collection_by_id,
     collection_schema,
+    create_collection,
     get_collection,
     get_record,
     list_collections,
+    update_collection_schema,
     update_record,
 )
+from obot.data.schema import CollectionSchema
 from obot.data.space import DataSpace, can_change, space_for, tz_for
 from obot.db.models import Bot, Collection, CollectionScope, Record, User
+from obot.i18n import lang_of
 
 NoticeShared = Callable[[], Awaitable[None]]
 ConfirmDelete = Callable[[Collection, Record], Awaitable[str]]
+
+
+@dataclass(frozen=True)
+class Definition:
+    """A personal collection a person is asked to confirm: a new one (collection_id None) or
+    new fields for one of theirs. Stored as JSON until they press Save."""
+
+    bot_id: int
+    user_id: int
+    key: str
+    title: dict[str, str]
+    schema: dict[str, Any]  # CollectionSchema as JSON
+    collection_id: int | None
+    added: list[str]  # keys of new fields, or of choice fields that got new options
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+    @classmethod
+    def from_json(cls, raw: str | bytes) -> "Definition":
+        return cls(**json.loads(raw))
+
+
+ProposeDefine = Callable[[Definition], Awaitable[str]]
+
+FIELD_SPEC_KEYS = {"key", "label", "type", "required", "options", "currency"}
+
+
+def parse_field_specs(fields: Any, lang: str) -> list[dict[str, Any]]:
+    """The model's field list as FieldDef JSON, labels in the person's language."""
+    if not isinstance(fields, list) or not fields:
+        raise InvalidSchema("fields must be a non-empty list of {key, label, type}")
+    specs = []
+    for item in fields:
+        if not isinstance(item, dict) or not {"key", "label", "type"} <= item.keys():
+            raise InvalidSchema("each field needs key, label and type")
+        spec = {k: v for k, v in item.items() if k in FIELD_SPEC_KEYS and v is not None}
+        spec["label"] = {lang: str(item["label"]).strip() or str(item["key"])}
+        specs.append(spec)
+    return specs
+
+
+def _schema(data: dict[str, Any]) -> CollectionSchema:
+    try:
+        return CollectionSchema.model_validate(data)
+    except ValidationError as e:
+        reasons = "; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors())
+        raise InvalidSchema(reasons) from None
+
+
+def _merge(old: CollectionSchema, specs: list[dict[str, Any]]) -> tuple[dict, list[str]]:
+    """Old fields plus new ones; choice fields gain new options. Returns (schema, added)."""
+    merged = old.model_dump(mode="json")
+    by_key = {f["key"]: f for f in merged["fields"]}
+    added = []
+    for spec in specs:
+        current = by_key.get(spec["key"])
+        if current is None:
+            merged["fields"].append(spec)
+            added.append(spec["key"])
+            continue
+        new_options = [o for o in spec.get("options", []) if o not in current["options"]]
+        if current["type"] == "choice" and new_options:
+            current["options"] += new_options
+            added.append(spec["key"])
+    return merged, added
+
 
 log = logging.getLogger(__name__)
 
@@ -109,6 +184,7 @@ class DataService:
         *,
         notice_shared: NoticeShared | None = None,
         confirm_delete: ConfirmDelete | None = None,
+        propose_define: ProposeDefine | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._pricing = pricing
@@ -116,6 +192,7 @@ class DataService:
         self._user_id = user_id
         self._notice_shared = notice_shared
         self._confirm_delete = confirm_delete
+        self._propose_define = propose_define
 
     async def _space(self, session: AsyncSession, key: str = "") -> DataSpace:
         bot = await session.get(Bot, self._bot_id)
@@ -265,3 +342,108 @@ class DataService:
             return format_summary(rows, chosen)
 
         return await self._run(collection, action)
+
+    async def _definition(
+        self, session: AsyncSession, key: str, title: str, fields: Any
+    ) -> Definition:
+        bot = await session.get(Bot, self._bot_id)
+        user = await session.get(User, self._user_id)
+        if bot is None or user is None:
+            raise CollectionNotFound(key)
+        space = await space_for(session, bot, user)
+        lang = lang_of(user.language)
+        specs = parse_field_specs(fields, lang)
+        key = str(key).strip()
+        visible = await list_collections(session, space)
+        own = next((c for c in visible if c.key == key and c.created_by_user_id == user.id), None)
+        if own is None and any(c.key == key for c in visible):
+            raise InvalidSchema(
+                f"{key!r} is one of the bot's own collections; add records to it instead"
+            )
+        if own is not None:
+            merged, added = _merge(collection_schema(own), specs)
+            if not added:
+                raise InvalidSchema(f"nothing new to add to {key!r}")
+            schema = _schema(merged)
+            # Dry run: the same checks Save will run (evolution, unique rules).
+            await update_collection_schema(session, own, schema)
+            return Definition(
+                bot.id,
+                user.id,
+                key,
+                dict(own.title),
+                schema.model_dump(mode="json"),
+                own.id,
+                added,
+            )
+        schema = _schema({"fields": specs})
+        title_text = str(title).strip() or key
+        # Dry run: key format, clashes and the person's collection limit.
+        await create_collection(
+            session,
+            self._pricing,
+            bot=bot,
+            key=key,
+            title={lang: title_text},
+            scope=CollectionScope.PERSONAL,
+            schema=schema,
+            created_by=user,
+        )
+        return Definition(
+            bot.id,
+            user.id,
+            key,
+            {lang: title_text},
+            schema.model_dump(mode="json"),
+            None,
+            [f.key for f in schema.fields],
+        )
+
+    async def define(self, collection: str, title: str, fields: list[dict[str, Any]]) -> str:
+        """Propose a personal collection (or new fields for one of the person's own); nothing
+        changes until they press Save (apply_definition)."""
+        if self._propose_define is None:
+            return "ERROR: new collections need the user's confirmation in their private chat."
+        try:
+            async with self._sessionmaker() as session:
+                try:
+                    definition = await self._definition(session, collection, title, fields)
+                finally:
+                    await session.rollback()  # the checks above are a dry run
+        except DataError as e:
+            return describe_error(e)
+        except Exception:
+            log.exception("data_define failed")
+            return "ERROR: the collection could not be prepared; try again later."
+        try:
+            return await self._propose_define(definition)
+        except Exception:
+            log.exception("proposing a collection failed")
+            return "ERROR: could not ask the user to confirm; try again later."
+
+
+async def apply_definition(session: AsyncSession, pricing: Pricing, d: Definition) -> Collection:
+    """Create or extend the person's collection as proposed; the caller commits. All checks
+    run again, so a proposal that went stale (limit reached, collection changed) fails."""
+    bot = await session.get(Bot, d.bot_id)
+    user = await session.get(User, d.user_id)
+    if bot is None or user is None:
+        raise CollectionNotFound(d.key)
+    schema = _schema(d.schema)
+    if d.collection_id is None:
+        return await create_collection(
+            session,
+            pricing,
+            bot=bot,
+            key=d.key,
+            title=d.title,
+            scope=CollectionScope.PERSONAL,
+            schema=schema,
+            created_by=user,
+        )
+    space = await space_for(session, bot, user)
+    c = await collection_by_id(session, space, d.collection_id)
+    if c.created_by_user_id != user.id:
+        raise NotAllowed("only the person's own collections can be changed in chat")
+    await update_collection_schema(session, c, schema)
+    return c
