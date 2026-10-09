@@ -99,3 +99,11 @@ def test_events_in_plain_words() -> None:
         update={"remind": [events.remind[0].model_copy(update={"before_minutes": 2880})]}
     )
     assert events_text(two, BOOKINGS, "en")[2] == "I remind them 2 days before Date"
+
+
+def test_a_reminder_at_the_time_says_so() -> None:
+    events = CollectionEvents.model_validate(
+        {"remind": [{"date_field": "date", "time_field": "time", "before_minutes": 0}]}
+    )
+    assert events_text(events, BOOKINGS, "en") == ["I remind them at Date"]
+    assert events_text(events, BOOKINGS, "fa") == ["همان موقع تاریخ یادآوری می‌کنم"]

@@ -32,8 +32,11 @@ from obot.bots.service import (
     get_or_create_user,
     register_managed_bot,
 )
+from obot.bots.users import has_started
 from obot.data.describe import collection_text
 from obot.data.errors import InvalidSchema
+from obot.data.events import collection_events
+from obot.data.repository import template_collections
 from obot.data.schema import CollectionEvents
 from obot.db.models import Bot as BotRecord
 from obot.db.models import (
@@ -116,6 +119,30 @@ def _data_problems(lang: str, problems: list[Problem]) -> str:
         f"• {html.escape(p.title)}: {html.escape(_problem_text(lang, p))}" for p in problems
     )
     return t(lang, "factory.data_problems", problems=listed)
+
+
+def open_keyboard(lang: str, username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(lang, "btn.open", username=username),
+                    url=f"https://t.me/{username}?start=init",
+                )
+            ]
+        ]
+    )
+
+
+async def owner_cannot_hear(session: AsyncSession, bot: BotRecord, owner_tg_id: int) -> bool:
+    """Whether the bot should tell its owner about new records but cannot: the owner never
+    started it (or left it), so those messages are skipped (SPEC 8.8)."""
+    notifies = any(
+        n.on == "create" and n.to == "owner"
+        for c in await template_collections(session, bot.id)
+        for n in collection_events(c).notify
+    )
+    return notifies and not await has_started(session, bot, owner_tg_id)
 
 
 def panel_button(lang: str, url: str) -> InlineKeyboardButton:
@@ -435,6 +462,11 @@ async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime)
     await query.message.answer(t(lang, "factory.saved", username=target.username))
     if problems:
         await query.message.answer(_data_problems(lang, problems), parse_mode=ParseMode.HTML)
+    if await owner_cannot_hear(session, target, query.from_user.id):
+        await query.message.answer(
+            t(lang, "factory.owner_start", username=target.username),
+            reply_markup=open_keyboard(lang, target.username),
+        )
 
 
 @router.callback_query(F.data.startswith("draft:cancel:"))
@@ -521,18 +553,15 @@ async def on_managed_bot(
         t(lang, "avatar.offer", username=username),
         reply_markup=offer_keyboard(lang, result.bot.id),
     )
-    # A managed bot cannot message its owner until they press Start (see docs/spikes).
+    # A managed bot cannot message its owner until they press Start (see docs/spikes);
+    # when it should tell them about new records, say so.
+    hint = (
+        "factory.owner_start"
+        if await owner_cannot_hear(session, result.bot, update.user.id)
+        else "factory.open_hint"
+    )
     await bot.send_message(
         update.user.id,
-        t(lang, "factory.open_hint"),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=t(lang, "btn.open", username=username),
-                        url=f"https://t.me/{username}?start=init",
-                    )
-                ]
-            ]
-        ),
+        t(lang, hint, username=username),
+        reply_markup=open_keyboard(lang, username),
     )
