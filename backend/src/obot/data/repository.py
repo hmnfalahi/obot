@@ -20,10 +20,13 @@ from obot.data.errors import (
     RecordNotFound,
     StaleRecord,
 )
+from obot.data.events import on_record_change, reschedule_collection
 from obot.data.schema import (
     KEY_PATTERN,
+    CollectionEvents,
     CollectionSchema,
     check_allowed_hours,
+    check_events,
     check_evolution,
     unique_keys,
     validate_record,
@@ -287,6 +290,16 @@ async def add_record(
         session.add(record)
         await session.flush()
         await _claim_keys(session, c, record, schema)
+    await on_record_change(
+        session,
+        c,
+        record,
+        "create",
+        owner_id=space.owner_id,
+        actor_user_id=space.user_id,
+        tz=tz,
+        now=datetime.now(UTC),
+    )
     return record
 
 
@@ -333,6 +346,16 @@ async def update_record(
         record.schema_version = c.schema_version
         await session.flush()
         await _claim_keys(session, c, record, schema)
+    await on_record_change(
+        session,
+        c,
+        record,
+        "update",
+        owner_id=space.owner_id,
+        actor_user_id=space.user_id,
+        tz=tz,
+        now=datetime.now(UTC),
+    )
     return record
 
 
@@ -343,7 +366,16 @@ async def delete_record(
     record = await _locked_record(session, space, c, record_id)
     record.deleted_at = datetime.now(UTC)
     await session.execute(delete(RecordKey).where(RecordKey.record_id == record.id))
-    await session.flush()
+    await on_record_change(
+        session,
+        c,
+        record,
+        "delete",
+        owner_id=space.owner_id,
+        actor_user_id=space.user_id,
+        tz=tz_for(space, c),
+        now=datetime.now(UTC),
+    )
 
 
 async def was_deleted(
@@ -362,3 +394,16 @@ async def purge_deleted_records(session: AsyncSession, retention_days: int) -> i
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     result = await session.execute(delete(Record).where(Record.deleted_at < cutoff))
     return result.rowcount
+
+
+async def set_collection_events(
+    session: AsyncSession, c: Collection, events: CollectionEvents
+) -> None:
+    """Replace the collection's notifications and reminders and reschedule its records'
+    reminders. Callers check that the caller may edit the collection."""
+    check_events(events, collection_schema(c), c.scope)
+    c.events = events.model_dump(mode="json")
+    owner = await session.scalar(
+        select(User).join(Bot, Bot.owner_id == User.id).where(Bot.id == c.bot_id)
+    )
+    await reschedule_collection(session, c, owner, datetime.now(UTC))

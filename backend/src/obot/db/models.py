@@ -265,6 +265,52 @@ class RecordKey(Base):
     record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"), index=True)
 
 
+class RecordEvent(Base):
+    """A message about a record waiting to be sent: an outbox row written in the same
+    transaction as the record change (SPEC 8.8). `data` is the record as it was then."""
+
+    __tablename__ = "record_events"
+    __table_args__ = (Index("ix_record_events_pending", "sent_at", "next_attempt_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    collection_id: Mapped[int] = mapped_column(
+        ForeignKey("collections.id", ondelete="CASCADE"), index=True
+    )
+    # No foreign key: a deleted record may be purged before its message is sent.
+    record_id: Mapped[int | None] = mapped_column(BigInteger)
+    kind: Mapped[str] = mapped_column(String(16))  # create | update | delete | remind
+    recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    actor_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    next_attempt_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    attempts: Mapped[int] = mapped_column(default=0, server_default="0")
+    sent_at: Mapped[datetime | None]
+    # sent | skipped (recipient can't be reached) | failed (gave up after retries)
+    outcome: Mapped[str | None] = mapped_column(String(16))
+
+
+class RecordReminder(Base):
+    """When to remind someone about a record; recomputed when its date changes."""
+
+    __tablename__ = "record_reminders"
+    __table_args__ = (
+        UniqueConstraint("record_id", "rule"),
+        Index("ix_record_reminders_due", "sent_at", "fire_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"))
+    collection_id: Mapped[int] = mapped_column(
+        ForeignKey("collections.id", ondelete="CASCADE"), index=True
+    )
+    rule: Mapped[int]  # index into the collection's remind rules
+    recipient_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    fire_at: Mapped[datetime]
+    sent_at: Mapped[datetime | None]
+
+
 class UsageEvent(Base):
     __tablename__ = "usage_events"
     __table_args__ = (
