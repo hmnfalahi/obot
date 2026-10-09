@@ -289,3 +289,45 @@ async def test_sync_stores_events_and_reports_bad_ones(data_world) -> None:
     )
     [problem] = await sync_collections(w.session, w.pricing, w.bot, [personal], "fa")
     assert problem.reason == "invalid"
+
+
+def test_reminder_minutes_are_bounded() -> None:
+    with pytest.raises(ValueError):
+        DraftReminder(date_field="date", before_minutes=60 * 24 * 31)
+
+
+def test_echoing_the_current_reminder_keeps_all_of_them() -> None:
+    current = CollectionEvents.model_validate(
+        {
+            "remind": [
+                {"date_field": "date", "time_field": "time", "before_minutes": 60},
+                {"date_field": "date", "time_field": "time", "before_minutes": 1440},
+            ]
+        }
+    )
+    echo = BOOKINGS.model_copy(
+        update={"reminder": DraftReminder(date_field="date", time_field="time", before_minutes=60)}
+    )
+    assert to_events(echo, current) == current
+
+
+async def test_notify_only_change_leaves_reminders_alone(data_world, monkeypatch) -> None:
+    from obot.data import repository
+
+    w = data_world
+    remind = DraftReminder(date_field="date", time_field="time", before_minutes=60)
+    await sync_collections(
+        w.session, w.pricing, w.bot, [BOOKINGS.model_copy(update={"reminder": remind})], "fa"
+    )
+    calls = []
+
+    async def spy(*args, **kwargs) -> None:
+        calls.append(1)
+
+    monkeypatch.setattr(repository, "reschedule_collection", spy)
+    draft = BOOKINGS.model_copy(update={"notify_owner": True})
+    assert await sync_collections(w.session, w.pricing, w.bot, [draft], "fa") == []
+    assert calls == []
+    later = BOOKINGS.model_copy(update={"no_reminder": True})
+    await sync_collections(w.session, w.pricing, w.bot, [later], "fa")
+    assert calls == [1]

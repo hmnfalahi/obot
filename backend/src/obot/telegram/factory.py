@@ -91,19 +91,14 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
         for c in draft.collections:
             try:
                 schema = to_schema(c, draft.language)
+                events = to_events(c, CollectionEvents())
             except InvalidSchema:
                 # The designer's validator makes this rare; never break the card.
                 lines.append(f"• {html.escape(t(lang, 'card.fixing', title=c.title))}")
                 continue
             lines.append(
                 html.escape(
-                    collection_text(
-                        c.title,
-                        CollectionScope(c.scope),
-                        schema,
-                        lang,
-                        to_events(c, CollectionEvents()),
-                    )
+                    collection_text(c.title, CollectionScope(c.scope), schema, lang, events)
                 )
             )
     lines += ["", f"<i>{t(lang, 'card.hint')}</i>"]

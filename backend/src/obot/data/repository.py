@@ -410,8 +410,10 @@ async def set_collection_events(
     """Replace the collection's notifications and reminders and reschedule its records'
     reminders. Callers check that the caller may edit the collection."""
     check_events(events, collection_schema(c), c.scope)
+    reminders_changed = CollectionEvents.model_validate(c.events or {}).remind != events.remind
     c.events = events.model_dump(mode="json")
-    await reschedule_collection(session, c, await _owner(session, c), datetime.now(UTC))
+    if reminders_changed:
+        await reschedule_collection(session, c, await _owner(session, c), datetime.now(UTC))
 
 
 async def _owner(session: AsyncSession, c: Collection) -> User:

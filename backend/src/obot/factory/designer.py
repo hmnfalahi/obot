@@ -18,7 +18,9 @@ from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models import Model
 
 from obot.data.errors import InvalidSchema
-from obot.factory.collections import CollectionDraft, to_schema
+from obot.data.schema import CollectionEvents, check_events
+from obot.db.models import CollectionScope
+from obot.factory.collections import CollectionDraft, to_events, to_schema
 
 
 class ToolName(enum.StrEnum):
@@ -83,6 +85,16 @@ class DesignerOutput(BaseModel):
     reply: str = Field(description="Short message to the user, in the user's language.")
 
 
+def _check(c: CollectionDraft, lang: str) -> None:
+    """Raise InvalidSchema when obot.data would refuse the collection or its events."""
+    schema = to_schema(c, lang)
+    events = to_events(c, CollectionEvents())
+    try:
+        check_events(events, schema, CollectionScope(c.scope))
+    except InvalidSchema as e:
+        raise InvalidSchema(f"{c.key}: {e}") from None
+
+
 def _problems(draft: BotDraft) -> dict[str, str]:
     """Why each collection (by key) would be refused; the first of a duplicated key is fine."""
     problems: dict[str, str] = {}
@@ -95,7 +107,7 @@ def _problems(draft: BotDraft) -> dict[str, str]:
             continue
         seen.add(c.key)
         try:
-            to_schema(c, draft.language)
+            _check(c, draft.language)
         except InvalidSchema as e:
             problems[c.key] = f"fix collection {e}"
     return problems
@@ -118,7 +130,7 @@ def drop_invalid_collections(output: DesignerOutput) -> tuple[DesignerOutput, li
     kept, dropped, seen, dropped_keys = [], [], set(), set()
     for c in draft.collections:
         try:
-            to_schema(c, draft.language)
+            _check(c, draft.language)
             ok = c.key not in seen
         except InvalidSchema:
             ok = False
@@ -187,7 +199,7 @@ notify_owner on a shared collection when the owner wants to hear about each new 
 (bookings, orders), notify_author_on_change when people should hear about changes to their
 record, and a reminder (date field, optional time field, minutes before) when people should
 be reminded before their booking. Only shared collections can message the owner. Omit a
-switch to keep its current value. When
+switch to keep its current value; set no_reminder to remove a reminder. When
 changing an existing bot, keep its collections and their keys unless the user asks
 otherwise; leaving one out never deletes its data.
 
