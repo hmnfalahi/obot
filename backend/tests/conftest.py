@@ -138,3 +138,43 @@ async def public_dns(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
 
     monkeypatch.setattr(loop, "getaddrinfo", fake_getaddrinfo)
+
+
+# --- structured data -----------------------------------------------------------------------
+
+
+class DataWorld:
+    """A bot owned by `owner` (tg 1001), started by `alice` (tg 2002) and `bob` (tg 3003)."""
+
+    def __init__(self, session, bot, owner, alice, bob, pricing) -> None:
+        self.session, self.bot, self.pricing = session, bot, pricing
+        self.owner, self.alice, self.bob = owner, alice, bob
+
+    async def space(self, user, tg_chat_id=None, is_group_admin=False):
+        from obot.data.space import space_for
+
+        return await space_for(
+            self.session, self.bot, user, tg_chat_id=tg_chat_id, is_group_admin=is_group_admin
+        )
+
+
+@pytest.fixture
+async def data_world(session, cipher) -> DataWorld:
+    from obot.bots.service import ManagedBotInfo, register_managed_bot
+    from obot.bots.users import join_bot
+    from obot.db.models import User
+
+    async def fetch_token(_: int) -> str:
+        return "t"
+
+    bot = (
+        await register_managed_bot(
+            session, cipher, fetch_token, 1001, ManagedBotInfo(77, "datab", "Data"), 10
+        )
+    ).bot
+    owner = await session.get(User, bot.owner_id)
+    owner.timezone = "Asia/Tehran"
+    alice, _ = await join_bot(session, bot, 2002, "fa")
+    bob, _ = await join_bot(session, bot, 3003, "en")
+    await session.flush()
+    return DataWorld(session, bot, owner, alice, bob, Pricing.load(PLANS_FILE))
