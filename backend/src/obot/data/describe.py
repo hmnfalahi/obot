@@ -6,7 +6,7 @@ The model reads obot.data.format instead; this module is for owners and users, i
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-from obot.data.schema import AllowedHours, CollectionSchema, FieldDef, FieldType
+from obot.data.schema import AllowedHours, CollectionEvents, CollectionSchema, FieldDef, FieldType
 from obot.db.models import CollectionScope
 from obot.i18n import t
 
@@ -86,12 +86,59 @@ def rules_text(schema: CollectionSchema, lang: str) -> list[str]:
     return lines
 
 
-def collection_text(title: str, scope: CollectionScope, schema: CollectionSchema, lang: str) -> str:
+def _duration_text(minutes: int, lang: str) -> str:
+    """The largest whole unit: days, then hours, then minutes."""
+    size, unit = next(
+        (size, unit)
+        for size, unit in ((1440, "day"), (60, "hour"), (1, "minute"))
+        if minutes % size == 0
+    )
+    n = minutes // size
+    # Persian has no singular form; English picks one for 1.
+    key = f"duration.{unit}" if lang != "fa" and n == 1 else f"duration.{unit}s"
+    text = t(lang, key, n=n)
+    return text.translate(_FA_DIGITS) if lang == "fa" else text
+
+
+def events_text(events: CollectionEvents, schema: CollectionSchema, lang: str) -> list[str]:
+    lines = []
+    pairs = {(n.on, n.to) for n in events.notify}
+    if ("create", "owner") in pairs:
+        lines.append(t(lang, "data.events.notify_owner"))
+    if ("update", "author") in pairs or ("delete", "author") in pairs:
+        lines.append(t(lang, "data.events.notify_author"))
+    fields = schema.field_map()
+    for r in events.remind:
+        field = (
+            label_of(fields[r.date_field].label, lang, r.date_field)
+            if r.date_field in fields
+            else r.date_field
+        )
+        lines.append(
+            t(
+                lang,
+                "data.events.remind",
+                amount=_duration_text(r.before_minutes, lang),
+                field=field,
+            )
+        )
+    return lines
+
+
+def collection_text(
+    title: str,
+    scope: CollectionScope,
+    schema: CollectionSchema,
+    lang: str,
+    events: CollectionEvents | None = None,
+) -> str:
     """A bullet with the title and who sees what, then its visible fields and rules."""
     lines = [f"• {title} — {t(lang, f'data.scope.{scope.value}')}"]
     visible = [field_text(f, lang) for f in schema.fields if not f.hidden]
     lines.append("   " + _separator(lang).join(visible))
     lines += [f"   {rule}" for rule in rules_text(schema, lang)]
+    if events is not None:
+        lines += [f"   {line}" for line in events_text(events, schema, lang)]
     return "\n".join(lines)
 
 

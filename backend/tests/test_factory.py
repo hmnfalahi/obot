@@ -222,6 +222,18 @@ async def test_card_shows_the_data_section(session) -> None:
     assert "هر تاریخ + ساعت فقط یک بار" in card
 
 
+async def test_card_shows_the_events(session) -> None:
+    owner = await get_or_create_user(session, 1001)
+    notifying = DENTIST.model_copy(
+        update={"collections": [BOOKINGS.model_copy(update={"notify_owner": True})]}
+    )
+    row = await start_draft(session, owner, notifying, last_reply=None)
+
+    card = render_card("fa", row, target_username=None)
+
+    assert "با هر مورد تازه به تو خبر می‌دهم" in card
+
+
 async def test_applying_a_draft_creates_its_collections(session, cipher) -> None:
     bot = await make_bot(session, cipher)
     row = await start_draft(session, bot.owner, DENTIST, last_reply=None)

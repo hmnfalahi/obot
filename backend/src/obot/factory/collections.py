@@ -16,19 +16,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.billing.plans import Pricing
 from obot.data.describe import label_of
 from obot.data.errors import DataError, InvalidSchema, LimitReached, SchemaChangeRejected
+from obot.data.events import collection_events
 from obot.data.format import describe_error
 from obot.data.repository import (
     check_shared_unique,
     collection_schema,
     create_collection,
+    set_collection_events,
     template_collections,
     update_collection_schema,
 )
 from obot.data.schema import (
     KEY_PATTERN,
     AllowedHours,
+    CollectionEvents,
     CollectionSchema,
     FieldDef,
+    NotifyRule,
+    RemindRule,
     Rules,
 )
 from obot.data.schema import FieldType as SchemaFieldType
@@ -71,6 +76,12 @@ class DraftHours(BaseModel):
     windows: list[DraftWindow]
 
 
+class DraftReminder(BaseModel):
+    date_field: str
+    time_field: str | None = Field(default=None, description="With a date field.")
+    before_minutes: int = Field(description="e.g. 1440 for a day before, 60 for an hour.")
+
+
 class CollectionDraft(BaseModel):
     key: str = Field(description="Lowercase latin slug, e.g. 'appointments'.")
     title: str = Field(description="Shown to people, in the bot's language.")
@@ -85,6 +96,47 @@ class CollectionDraft(BaseModel):
         default=[], description="Field groups that must not repeat, e.g. [['date','time']]."
     )
     allowed_hours: DraftHours | None = None
+    notify_owner: bool | None = Field(
+        default=None,
+        description="Shared only: message the owner about each new record. Omit to keep.",
+    )
+    notify_author_on_change: bool | None = Field(
+        default=None,
+        description=(
+            "Shared only: tell the person when someone else changes or removes their "
+            "record. Omit to keep."
+        ),
+    )
+    reminder: DraftReminder | None = Field(
+        default=None, description="Remind the person before their record's date. Omit to keep."
+    )
+    no_reminder: bool = Field(default=False, description="True removes the reminder.")
+
+
+def to_events(d: CollectionDraft, current: CollectionEvents) -> CollectionEvents:
+    """The draft's switches over the current events; omitted switches keep their value."""
+    notify = {(n.on, n.to) for n in current.notify}
+    if d.notify_owner is not None:
+        notify.discard(("create", "owner"))
+        if d.notify_owner:
+            notify.add(("create", "owner"))
+    if d.notify_author_on_change is not None:
+        notify -= {("update", "author"), ("delete", "author")}
+        if d.notify_author_on_change:
+            notify |= {("update", "author"), ("delete", "author")}
+    remind = current.remind
+    if d.no_reminder:
+        remind = []
+    elif d.reminder is not None:
+        remind = [RemindRule(**d.reminder.model_dump())]
+    order = ["create", "update", "delete"]
+    return CollectionEvents(
+        notify=[
+            NotifyRule(on=on, to=to)
+            for on, to in sorted(notify, key=lambda n: (order.index(n[0]), n[1]))
+        ],
+        remind=remind,
+    )
 
 
 def _reasons(e: ValidationError, hidden: int = 0) -> str:
@@ -134,6 +186,9 @@ def from_collection(c: Collection, lang: str) -> CollectionDraft:
     """A template collection as the designer sees it: visible fields, labels in `lang`."""
     schema = collection_schema(c)
     allowed = schema.rules.allowed_hours
+    events = collection_events(c)
+    pairs = {(n.on, n.to) for n in events.notify}
+    reminder = events.remind[0] if events.remind else None
     return CollectionDraft(
         key=c.key,
         title=label_of(c.title, lang, c.key),
@@ -161,6 +216,15 @@ def from_collection(c: Collection, lang: str) -> CollectionDraft:
             ],
         )
         if allowed
+        else None,
+        notify_owner=("create", "owner") in pairs,
+        notify_author_on_change=("update", "author") in pairs or ("delete", "author") in pairs,
+        reminder=DraftReminder(
+            date_field=reminder.date_field,
+            time_field=reminder.time_field,
+            before_minutes=reminder.before_minutes,
+        )
+        if reminder
         else None,
     )
 
@@ -258,6 +322,13 @@ def _log_problem(bot: Bot, d: CollectionDraft, e: DataError) -> None:
     log.info("collection %r of bot %s not applied: %s", d.key, bot.id, describe_error(e))
 
 
+async def _sync_events(session: AsyncSession, c: Collection, d: CollectionDraft) -> None:
+    current = collection_events(c)
+    events = to_events(d, current)
+    if events != current:
+        await set_collection_events(session, c, events)
+
+
 async def sync_collections(
     session: AsyncSession,
     pricing: Pricing,
@@ -280,7 +351,7 @@ async def sync_collections(
                 schema = _schema_of(d, lang)
                 c = existing.get(d.key)
                 if c is None:
-                    await create_collection(
+                    c = await create_collection(
                         session,
                         pricing,
                         bot=bot,
@@ -289,6 +360,7 @@ async def sync_collections(
                         scope=CollectionScope(d.scope),
                         schema=schema,
                     )
+                    await _sync_events(session, c, d)
                     continue
                 if c.scope.value != d.scope:
                     problems.append(Problem(d.title, "kind_change"))
@@ -301,6 +373,7 @@ async def sync_collections(
                 if c.title.get(lang) != d.title:
                     c.title = {**c.title, lang: d.title}
                     await session.flush()
+                await _sync_events(session, c, d)
         except LimitReached as e:
             _log_problem(bot, d, e)
             problems.append(Problem(d.title, "limit" if e.limit == "collections" else "plan_limit"))

@@ -34,6 +34,7 @@ from obot.bots.service import (
 )
 from obot.data.describe import collection_text
 from obot.data.errors import InvalidSchema
+from obot.data.schema import CollectionEvents
 from obot.db.models import Bot as BotRecord
 from obot.db.models import (
     BotStatus,
@@ -44,7 +45,7 @@ from obot.db.models import (
     FactoryDraft,
     User,
 )
-from obot.factory.collections import Problem, to_schema
+from obot.factory.collections import Problem, to_events, to_schema
 from obot.factory.designer import BotDraft, design
 from obot.factory.drafts import (
     apply_draft,
@@ -95,7 +96,15 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
                 lines.append(f"• {html.escape(t(lang, 'card.fixing', title=c.title))}")
                 continue
             lines.append(
-                html.escape(collection_text(c.title, CollectionScope(c.scope), schema, lang))
+                html.escape(
+                    collection_text(
+                        c.title,
+                        CollectionScope(c.scope),
+                        schema,
+                        lang,
+                        to_events(c, CollectionEvents()),
+                    )
+                )
             )
     lines += ["", f"<i>{t(lang, 'card.hint')}</i>"]
     return "\n".join(lines)
