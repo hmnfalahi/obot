@@ -339,6 +339,7 @@ async def _respond(
             ask_for_keys=ask_for_keys,
             # Group data comes later (SPEC 8.8, P5-7); personal data never reaches a group.
             data=not group,
+            interactive=not group,
         )
         reply = await generate_reply(
             chosen.model,

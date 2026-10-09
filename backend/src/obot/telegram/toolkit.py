@@ -42,6 +42,7 @@ async def toolkit(
     schedule: Callable[[str], Awaitable[str]] | None = None,
     ask_for_keys: Callable[[list[str]], Awaitable[str]] | None = None,
     data: bool = True,
+    interactive: bool = False,
 ) -> Toolkit:
     """The bot's tools, metered against `payer` (whoever started the request).
 
@@ -50,7 +51,8 @@ async def toolkit(
     lets it draft scheduled tasks for the payer, and `ask_for_keys` lets it ask them for
     keys its APIs need. The payer's own keys fill the APIs' key slots. `data` False (group
     chats) leaves out the bot's collections; elsewhere the data_* tools work on the payer's
-    own space.
+    own space. `interactive` (a live private chat with the person) is
+    what lets the bot propose personal collections (data_define).
     """
     apis = await load_endpoints(session, bot)
     services = ToolServices(
@@ -66,7 +68,7 @@ async def toolkit(
     if peers:
         services.delegate = Delegator(runtime, bot, payer, data=data)
     data_note = None
-    personal = PERSONAL_DATA in (bot.tools or [])
+    personal = interactive and PERSONAL_DATA in (bot.tools or [])
     if data:
         owner = await session.get(User, bot.owner_id) or payer
         service = DataService(

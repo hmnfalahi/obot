@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -16,11 +17,13 @@ from obot.core.tools import (
     data_add,
     data_define,
 )
+from obot.data.format import DEFINE_HINT
 from obot.data.query import find_records
 from obot.data.repository import create_collection, get_collection
 from obot.data.schema import CollectionSchema
 from obot.data.service import DataService
 from obot.db.models import BotVisibility, CollectionScope, Record
+from obot.i18n import t
 from obot.telegram import data_chat
 from obot.telegram.data_chat import DefineProposer, DeleteConfirmer, SharedNotice
 from obot.telegram.toolkit import toolkit
@@ -382,7 +385,7 @@ async def test_switch_gives_data_tools_without_collections(data_world) -> None:
     w = data_world
     runtime = runtime_for(w)
     w.bot.tools = ["personal_data"]
-    kit = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    kit = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice, interactive=True)
     assert set(DATA_TOOLS) <= {t.name for t in kit.tools}
     assert "no data collections yet" in kit.note
     in_group = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice, data=False)
@@ -426,14 +429,19 @@ async def test_toolkit_offers_data_define_only_with_the_switch(data_world) -> No
     w = data_world
     runtime = runtime_for(w)
     await expenses(w)
-    plain = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    now = datetime.now(UTC)
+    plain = await toolkit(w.session, runtime, w.bot, now, w.alice, interactive=True)
     w.bot.tools = ["personal_data"]
-    switched = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    switched = await toolkit(w.session, runtime, w.bot, now, w.alice, interactive=True)
+    background = await toolkit(w.session, runtime, w.bot, now, w.alice)
     assert DEFINE_TOOL not in {t.name for t in plain.tools}
     assert DEFINE_TOOL in {t.name for t in switched.tools}
+    assert DEFINE_TOOL not in {t.name for t in background.tools}
+    assert DEFINE_HINT in switched.note
+    assert DEFINE_HINT not in (background.note or "")
 
 
-async def press_define(w, runtime, data: str, who: TgUser) -> AsyncMock:
+async def press_define(w, runtime, data: str, who: TgUser, session=None) -> AsyncMock:
     client = AsyncMock()
     message = Message(
         message_id=4, date=datetime.now(UTC), chat=Chat(id=who.id, type="private"), text="card"
@@ -441,7 +449,7 @@ async def press_define(w, runtime, data: str, who: TgUser) -> AsyncMock:
     query = CallbackQuery(id="q", from_user=who, chat_instance="c", data=data, message=message).as_(
         client
     )
-    await data_chat.on_define_button(query, w.session, w.bot, runtime)
+    await data_chat.on_define_button(query, session or w.session, w.bot, runtime)
     return client
 
 
@@ -475,7 +483,7 @@ async def test_save_creates_the_collection_only_for_its_person(data_world) -> No
     await press_define(w, runtime, save, ALICE)
     assert await service.find("weight") == "No records."  # it exists now
     again = await press_define(w, runtime, save, ALICE)  # second press: expired, no crash
-    assert again.await_count >= 1
+    assert again.await_args.args[0].text == t("fa", "data.define_expired")
 
 
 async def test_cancel_drops_the_proposal(data_world) -> None:
@@ -510,4 +518,74 @@ async def test_unparseable_proposal_is_treated_as_expired(data_world) -> None:
     runtime.redis = FakeRedis()
     runtime.redis.data["data-define:tok"] = "not json"
     await press_define(w, runtime, "datadef:ok:tok", ALICE)
+    assert runtime.redis.data == {}
+
+
+async def test_two_presses_apply_once(data_world) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    runtime.redis = FakeRedis()
+    await w.session.commit()
+    service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        propose_define=DefineProposer(runtime, w.bot, w.alice),
+    )
+    await service.define("weight", "My weight", WEIGHT)
+    save = runtime.sender.send_text.await_args.kwargs["buttons"].inline_keyboard[0][0].callback_data
+
+    async with runtime.sessionmaker() as other:
+        first, second = await asyncio.gather(
+            press_define(w, runtime, save, ALICE),
+            press_define(w, runtime, save, ALICE, session=other),
+        )
+
+    texts = [c.await_args.args[0].text for c in (first, second)]
+    assert sorted(texts) == sorted(
+        [t("fa", "data.define_saved", title="My weight"), t("fa", "data.define_expired")]
+    )
+    assert await service.find("weight") == "No records."
+
+
+async def test_unexpected_failure_while_saving_is_reported(data_world, monkeypatch) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    runtime.redis = FakeRedis()
+    await w.session.commit()
+    service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        propose_define=DefineProposer(runtime, w.bot, w.alice),
+    )
+    await service.define("weight", "My weight", WEIGHT)
+    save = runtime.sender.send_text.await_args.kwargs["buttons"].inline_keyboard[0][0].callback_data
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(data_chat, "apply_definition", boom)
+    client = await press_define(w, runtime, save, ALICE)
+
+    assert "try again later" in client.await_args.args[0].text
+
+
+async def test_proposal_is_not_stored_when_the_send_fails(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    runtime.redis = FakeRedis()
+    runtime.sender.send_text = AsyncMock(side_effect=RuntimeError("telegram down"))
+    service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        propose_define=DefineProposer(runtime, w.bot, w.alice),
+    )
+    await service.define("weight", "My weight", WEIGHT)
     assert runtime.redis.data == {}
