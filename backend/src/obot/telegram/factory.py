@@ -32,8 +32,19 @@ from obot.bots.service import (
     get_or_create_user,
     register_managed_bot,
 )
+from obot.data.describe import collection_text
+from obot.data.errors import InvalidSchema
 from obot.db.models import Bot as BotRecord
-from obot.db.models import BotStatus, BotVisibility, DraftKind, DraftState, FactoryDraft, User
+from obot.db.models import (
+    BotStatus,
+    BotVisibility,
+    CollectionScope,
+    DraftKind,
+    DraftState,
+    FactoryDraft,
+    User,
+)
+from obot.factory.collections import to_schema
 from obot.factory.designer import BotDraft, design
 from obot.factory.drafts import (
     apply_draft,
@@ -74,8 +85,23 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
     if draft.tools:
         tools = ", ".join(t(lang, f"tool.{tool}") for tool in draft.tools)
         lines += ["", f"🧰 {t(lang, 'card.tools')}: {tools}"]
+    if draft.collections:
+        lines += ["", f"📋 {t(lang, 'card.data')}:"]
+        for c in draft.collections:
+            try:
+                schema = to_schema(c, draft.language)
+            except InvalidSchema:
+                continue  # the designer's validator makes this rare; never break the card
+            lines.append(
+                html.escape(collection_text(c.title, CollectionScope(c.scope), schema, lang))
+            )
     lines += ["", f"<i>{t(lang, 'card.hint')}</i>"]
     return "\n".join(lines)
+
+
+def _data_problems(lang: str, problems: list[str]) -> str:
+    listed = "\n".join(f"• {html.escape(p)}" for p in problems)
+    return t(lang, "factory.data_problems", problems=listed)
 
 
 def panel_button(lang: str, url: str) -> InlineKeyboardButton:
@@ -378,7 +404,7 @@ async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime)
     draft = draft_of(row)
     old_name = target.display_name
     old_description = (target.persona or {}).get("description")
-    await apply_draft(session, row, target)
+    problems = await apply_draft(session, row, target, runtime.pricing)
     target.display_name = draft.name
     token = runtime.cipher.decrypt(target.token_encrypted, str(target.tg_bot_id))
     await sync_profile(
@@ -390,6 +416,8 @@ async def on_save(query: CallbackQuery, session: AsyncSession, runtime: Runtime)
     await query.answer()
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.answer(t(lang, "factory.saved", username=target.username))
+    if problems:
+        await query.message.answer(_data_problems(lang, problems), parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data.startswith("draft:cancel:"))
@@ -433,10 +461,11 @@ async def on_managed_bot(
     log.info("managed bot @%s: %s", update.bot_user.username, result.outcome)
 
     created_draft = None
+    problems: list[str] = []
     if result.outcome == RegisterOutcome.CREATED:
         if row := await take_awaiting_draft(session, owner):
             created_draft = draft_of(row)
-            await apply_draft(session, row, result.bot)
+            problems = await apply_draft(session, row, result.bot, runtime.pricing)
             # Keep the name the user confirmed in Telegram's creation dialog.
             result.bot.display_name = update.bot_user.first_name
             await sync_profile(result.token, created_draft, set_name=False)
@@ -466,6 +495,10 @@ async def on_managed_bot(
         t(lang, "factory.ready", username=username),
         reply_markup=ReplyKeyboardRemove(),
     )
+    if problems:
+        await bot.send_message(
+            update.user.id, _data_problems(lang, problems), parse_mode=ParseMode.HTML
+        )
     await bot.send_message(
         update.user.id,
         t(lang, "avatar.offer", username=username),

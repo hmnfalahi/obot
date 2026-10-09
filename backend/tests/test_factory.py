@@ -1,14 +1,21 @@
 import re
+from pathlib import Path
 
+import pytest
+from pydantic_ai import ModelRetry
 from pydantic_ai.models.test import TestModel
 
+from obot.billing.plans import Pricing
 from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
+from obot.data.repository import template_collections
 from obot.db.models import DraftKind, DraftState
 from obot.factory.designer import (
     BotDraft,
+    DesignerOutput,
     ExistingBot,
     ToolName,
     build_prompt,
+    check_output,
     design,
     make_username,
 )
@@ -21,6 +28,7 @@ from obot.factory.drafts import (
     update_draft,
 )
 from obot.telegram.factory import render_card
+from tests.test_factory_collections import BOOKINGS
 
 DRAFT = BotDraft(
     name="Dollar Watch",
@@ -30,6 +38,8 @@ DRAFT = BotDraft(
     language="fa",
     tools=[ToolName.READ_URL],
 )
+PLANS = Pricing.load(Path(__file__).parent.parent / "plans.yaml")
+DENTIST = DRAFT.model_copy(update={"name": "Dr. Sara", "collections": [BOOKINGS]})
 
 
 async def make_bot(session, cipher, tg_bot_id: int = 7):
@@ -91,7 +101,7 @@ async def test_new_draft_flow_applies_to_created_bot(session, cipher) -> None:
     bot = await make_bot(session, cipher)
     taken = await take_awaiting_draft(session, owner)
     assert taken is row
-    await apply_draft(session, taken, bot)
+    await apply_draft(session, taken, bot, PLANS)
 
     assert bot.persona["system_prompt"] == "Be formal."
     assert bot.tools == ["read_url"]
@@ -125,7 +135,7 @@ async def test_existing_bots_are_described_for_the_designer(session, cipher) -> 
     bot = await make_bot(session, cipher)
     owner = bot.owner
     row = await start_draft(session, owner, DRAFT, last_reply=None)
-    await apply_draft(session, row, bot)
+    await apply_draft(session, row, bot, PLANS)
 
     [existing] = await existing_bot_drafts(session, owner)
 
@@ -153,3 +163,61 @@ async def test_card_escapes_html(session) -> None:
 
     assert "&lt;b&gt;x&lt;/b&gt;" in card
     assert "read web pages" in card
+
+
+def test_check_output_asks_the_model_to_fix_invalid_collections() -> None:
+    ok = DesignerOutput(action="draft", draft=DENTIST, reply="ok")
+    check_output(ok)
+
+    broken = BOOKINGS.model_copy(update={"unique": [["phone"]]})
+    bad = DesignerOutput(
+        action="draft", draft=DRAFT.model_copy(update={"collections": [broken]}), reply="ok"
+    )
+    with pytest.raises(ModelRetry) as caught:
+        check_output(bad)
+    assert "appointments" in str(caught.value)
+
+    twice = DesignerOutput(
+        action="draft",
+        draft=DRAFT.model_copy(update={"collections": [BOOKINGS, BOOKINGS]}),
+        reply="ok",
+    )
+    with pytest.raises(ModelRetry):
+        check_output(twice)
+
+
+async def test_design_accepts_collections() -> None:
+    model = TestModel(
+        custom_output_args={
+            "action": "draft",
+            "draft": DENTIST.model_dump(mode="json"),
+            "questions": [],
+            "reply": "ساختمش!",
+        }
+    )
+    result = await design(model, "دندانپزشکم، بیمارها نوبت بگیرند")
+    assert result.output.draft.collections[0].key == "appointments"
+
+
+async def test_card_shows_the_data_section(session) -> None:
+    owner = await get_or_create_user(session, 1001)
+    row = await start_draft(session, owner, DENTIST, last_reply=None)
+
+    card = render_card("fa", row, target_username=None)
+
+    assert "📋" in card and "نوبت‌ها" in card
+    assert "همه ثبت می‌کنند، فقط شما همه را می‌بینید" in card
+    assert "هر تاریخ + ساعت فقط یک بار" in card
+
+
+async def test_applying_a_draft_creates_its_collections(session, cipher) -> None:
+    bot = await make_bot(session, cipher)
+    row = await start_draft(session, bot.owner, DENTIST, last_reply=None)
+
+    problems = await apply_draft(session, row, bot, PLANS)
+
+    assert problems == []
+    [c] = await template_collections(session, bot.id)
+    assert c.key == "appointments"
+    [existing] = await existing_bot_drafts(session, bot.owner)
+    assert existing.draft.collections[0].key == "appointments"
