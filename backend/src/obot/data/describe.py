@@ -34,13 +34,30 @@ def field_text(f: FieldDef, lang: str) -> str:
     return f"{label_of(f.label, lang, f.key)} ({kind})"
 
 
-def _windows_text(allowed: AllowedHours, lang: str) -> str:
+def _days_text(weekdays: list[int], lang: str) -> str:
+    """Days in the language's week order; three or more consecutive days become a range."""
     order = _WEEK_ORDER.get(lang, _WEEK_ORDER["en"])
+    positions = sorted({order.index(d) for d in weekdays})
+    runs: list[list[int]] = []
+    for p in positions:
+        if runs and p == runs[-1][-1] + 1:
+            runs[-1].append(p)
+        else:
+            runs.append([p])
+    parts = []
+    for run in runs:
+        names = [t(lang, f"weekday.{order[p]}") for p in run]
+        if len(run) >= 3:
+            parts.append(t(lang, "data.rule.days", first=names[0], last=names[-1]))
+        else:
+            parts += names
+    return _separator(lang).join(parts)
+
+
+def _windows_text(allowed: AllowedHours, lang: str) -> str:
     parts = []
     for w in allowed.windows:
-        days = _separator(lang).join(
-            t(lang, f"weekday.{d}") for d in sorted(w.weekdays, key=order.index)
-        )
+        days = _days_text(w.weekdays, lang)
         parts.append(
             t(
                 lang,

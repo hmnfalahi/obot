@@ -45,8 +45,38 @@ MESSAGES: dict[str, dict[str, str]] = {
         "factory.problem.kind_change": (
             "a list can't switch between personal and shared; make a new one"
         ),
-        "factory.problem.breaks_records": "it doesn't fit the data already saved ({detail})",
-        "factory.problem.invalid": "its design is not valid ({detail})",
+        "factory.problem.plan_limit": "it goes past a limit of your plan",
+        "factory.problem.too_many_fields": (
+            "it has too many fields ({hidden} hidden fields count too)"
+        ),
+        "factory.problem.invalid": "its design is not valid; describe it again",
+        "factory.change.removed": (
+            "“{field}” can't be removed because it has data; it can be hidden instead"
+        ),
+        "factory.change.type_change": (
+            "the type of “{field}” can't change because it has data; add a new field instead"
+        ),
+        "factory.change.unhide_required": (
+            "the hidden field “{field}” can't come back as required; keep it optional"
+        ),
+        "factory.change.currency_change": (
+            "the currency of “{field}” can't change because it has data; add a new field instead"
+        ),
+        "factory.change.became_required": (
+            "“{field}” already has data, so it can't become required; keep it optional"
+        ),
+        "factory.change.options_removed": (
+            "options of “{field}” can only be added because it has data; keep the old ones"
+        ),
+        "factory.change.limits_narrowed": (
+            "the limits of “{field}” can only get wider because it has data"
+        ),
+        "factory.change.required_added": (
+            "the new field “{field}” must be optional because the list already has data"
+        ),
+        "factory.change.unique_added": (
+            "a no-repeat rule can't be added to a list that has data; make a new list instead"
+        ),
         "factory.problem.failed": "it could not be saved; try again",
         "factory.data_problems": "⚠️ Some lists were not changed:\n{problems}",
         "card.hint": "Send a message to change anything.",
@@ -122,6 +152,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "data.scope.shared": "everyone adds, only you see them all",
         "data.rule.unique": "one per {fields}",
         "data.rule.window": "{days} {start}–{end}",
+        "data.rule.days": "{first}–{last}",
         "data.define_new": "📋 New list «{title}» for you:\n{fields}",
         "data.define_add": "📋 Add to «{title}»:\n{fields}",
         "btn.data_save": "✅ Save",
@@ -234,8 +265,34 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "factory.problem.limit": "به سقف تعداد فهرست‌های پلنت رسیده‌ای",
         "factory.problem.kind_change": "نوع فهرست (شخصی/مشترک) عوض نمی‌شود؛ یک فهرست تازه بساز",
-        "factory.problem.breaks_records": "با داده‌هایی که الان ثبت شده جور نیست ({detail})",
-        "factory.problem.invalid": "طرحش درست نیست ({detail})",
+        "factory.problem.plan_limit": "از سقف پلنت بیشتر می‌شود",
+        "factory.problem.too_many_fields": (
+            "فیلدها از سقف گذشته‌اند ({hidden} فیلد پنهان هم حساب می‌شوند)"
+        ),
+        "factory.problem.invalid": "طرحش درست نیست؛ دوباره توضیحش بده",
+        "factory.change.removed": "«{field}» حذف نمی‌شود چون داده دارد؛ می‌شود پنهانش کرد",
+        "factory.change.type_change": (
+            "نوع «{field}» عوض نمی‌شود چون داده دارد؛ یک فیلد تازه اضافه کن"
+        ),
+        "factory.change.unhide_required": (
+            "«{field}» که پنهان بود نمی‌تواند اجباری برگردد؛ اختیاری نگهش دار"
+        ),
+        "factory.change.currency_change": (
+            "واحد پول «{field}» عوض نمی‌شود چون داده دارد؛ یک فیلد تازه اضافه کن"
+        ),
+        "factory.change.became_required": (
+            "«{field}» داده دارد و نمی‌تواند اجباری شود؛ اختیاری نگهش دار"
+        ),
+        "factory.change.options_removed": (
+            "به گزینه‌های «{field}» فقط می‌شود اضافه کرد چون داده دارد؛ گزینه‌های قبلی را نگه دار"
+        ),
+        "factory.change.limits_narrowed": "محدوده‌ی «{field}» چون داده دارد فقط بازتر می‌شود",
+        "factory.change.required_added": (
+            "فیلد تازه‌ی «{field}» باید اختیاری باشد چون فهرست داده دارد"
+        ),
+        "factory.change.unique_added": (
+            "به فهرستی که داده دارد قانون «تکراری نباشد» اضافه نمی‌شود؛ یک فهرست تازه بساز"
+        ),
         "factory.problem.failed": "ذخیره نشد؛ دوباره امتحان کن",
         "factory.data_problems": "⚠️ این فهرست‌ها تغییر نکردند:\n{problems}",
         "card.hint": "برای تغییر هر چیزی پیام بده.",
@@ -308,9 +365,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "weekday.5": "شنبه",
         "weekday.6": "یکشنبه",
         "data.scope.personal": "هر کاربر برای خودش",
-        "data.scope.shared": "همه ثبت می‌کنند، فقط شما همه را می‌بینید",
+        "data.scope.shared": "همه ثبت می‌کنند، فقط تو همه را می‌بینی",
         "data.rule.unique": "هر {fields} فقط یک بار",
         "data.rule.window": "{days} {start} تا {end}",
+        "data.rule.days": "{first} تا {last}",
         "data.define_new": "📋 فهرست تازه‌ی «{title}» برای تو:\n{fields}",
         "data.define_add": "📋 اضافه به «{title}»:\n{fields}",
         "btn.data_save": "✅ ذخیره",

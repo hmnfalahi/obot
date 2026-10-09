@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
+from obot.data.describe import label_of
 from obot.data.errors import DataError, InvalidSchema, LimitReached, SchemaChangeRejected
 from obot.data.format import describe_error
 from obot.data.repository import (
@@ -23,7 +24,14 @@ from obot.data.repository import (
     template_collections,
     update_collection_schema,
 )
-from obot.data.schema import KEY_PATTERN, CollectionSchema
+from obot.data.schema import (
+    KEY_PATTERN,
+    AllowedHours,
+    CollectionSchema,
+    FieldDef,
+    Rules,
+)
+from obot.data.schema import FieldType as SchemaFieldType
 from obot.db.models import Bot, Collection, CollectionScope
 
 log = logging.getLogger(__name__)
@@ -124,20 +132,16 @@ def to_schema(d: CollectionDraft, lang: str) -> CollectionSchema:
 
 def from_collection(c: Collection, lang: str) -> CollectionDraft:
     """A template collection as the designer sees it: visible fields, labels in `lang`."""
-
-    def label(labels: dict[str, str], fallback: str) -> str:
-        return labels.get(lang) or next(iter(labels.values()), None) or fallback
-
     schema = collection_schema(c)
     allowed = schema.rules.allowed_hours
     return CollectionDraft(
         key=c.key,
-        title=label(c.title, c.key),
+        title=label_of(c.title, lang, c.key),
         scope=c.scope.value,
         fields=[
             DraftField(
                 key=f.key,
-                label=label(f.label, f.key),
+                label=label_of(f.label, lang, f.key),
                 type=f.type.value,
                 required=f.required,
                 options=f.options,
@@ -161,11 +165,45 @@ def from_collection(c: Collection, lang: str) -> CollectionDraft:
     )
 
 
+class TooManyFields(InvalidSchema):
+    """The merged schema has more fields than allowed; `hidden` of them are hidden ones."""
+
+    def __init__(self, message: str, hidden: int) -> None:
+        super().__init__(message)
+        self.hidden = hidden
+
+
+def _hours_fit(allowed: AllowedHours, fields: dict[str, FieldDef]) -> bool:
+    day = fields.get(allowed.date_field)
+    if allowed.time_field is None:
+        return day is not None and day.type == SchemaFieldType.DATETIME
+    at = fields.get(allowed.time_field)
+    return (
+        day is not None
+        and day.type == SchemaFieldType.DATE
+        and at is not None
+        and at.type == SchemaFieldType.TIME
+    )
+
+
+def _merge_rules(old: Rules, new: Rules, fields: dict[str, FieldDef]) -> Rules:
+    """The factory only adds rules: every old unique group stays, in its old order (a reordered
+    group is the same rule), and the old allowed hours stay unless the draft sets new ones (or
+    retypes their fields, which only an empty collection allows). Removing a rule is for the
+    owner's panel."""
+    known = {frozenset(g) for g in old.unique}
+    unique = old.unique + [g for g in new.unique if frozenset(g) not in known]
+    allowed = new.allowed_hours
+    if allowed is None and old.allowed_hours and _hours_fit(old.allowed_hours, fields):
+        allowed = old.allowed_hours
+    return Rules(unique=unique, allowed_hours=allowed)
+
+
 def merge_schema(old: CollectionSchema, new: CollectionSchema) -> CollectionSchema:
     """`new` applied over `old`: old fields missing from `new` stay, hidden; labels merge by
     language so other languages' labels are kept. Existing fields keep their order and new ones
-    are appended. min/max/currency the draft leaves unset are kept from the old field. Rules come
-    from `new`."""
+    are appended. min/max/currency the draft leaves unset are kept from the old field. Rules
+    merge as in _merge_rules."""
     new_fields = new.field_map()
     fields = []
     for f in old.fields:
@@ -177,29 +215,47 @@ def merge_schema(old: CollectionSchema, new: CollectionSchema) -> CollectionSche
             fields.append(n.model_copy(update={"label": {**f.label, **n.label}, **keep}))
     old_keys = old.field_map()
     fields += [n for n in new.fields if n.key not in old_keys]
+    hidden = sum(f.hidden for f in fields)
+    by_key = {f.key: f for f in fields}
     try:
         return CollectionSchema.model_validate(
             {
                 "fields": [f.model_dump(mode="json") for f in fields],
-                "rules": new.rules.model_dump(mode="json"),
+                "rules": _merge_rules(old.rules, new.rules, by_key).model_dump(mode="json"),
             }
         )
     except ValidationError as e:
-        raise InvalidSchema(_reasons(e, hidden=sum(f.hidden for f in fields))) from None
+        if any(err["loc"] == ("fields",) and err["type"] == "too_long" for err in e.errors()):
+            raise TooManyFields(_reasons(e, hidden=hidden), hidden) from None
+        raise InvalidSchema(_reasons(e, hidden=hidden)) from None
 
 
 @dataclass(frozen=True)
 class Problem:
-    """A collection that could not be applied. `reason` is a code the UI words for people:
-    limit | kind_change | breaks_records | invalid | failed."""
+    """A collection that could not be applied, for the UI to word for people. `reason`:
+    limit | plan_limit | kind_change | breaks_records | too_many_fields | invalid | failed.
+    breaks_records carries `change` (SchemaChangeRejected.change) and `field`, the field's
+    label in the bot's language; too_many_fields carries `hidden`. Engine wording stays in
+    the logs."""
 
     title: str
     reason: str
-    detail: str | None = None
+    change: str | None = None
+    field: str | None = None
+    hidden: int = 0
 
 
-def _detail(e: DataError) -> str:
-    return describe_error(e).removeprefix("ERROR: ").rstrip(".")
+def _field_label(schemas: list[CollectionSchema], key: str | None, lang: str) -> str | None:
+    if key is None:
+        return None
+    for schema in schemas:
+        if (f := schema.field(key)) is not None:
+            return label_of(f.label, lang, key)
+    return key
+
+
+def _log_problem(bot: Bot, d: CollectionDraft, e: DataError) -> None:
+    log.info("collection %r of bot %s not applied: %s", d.key, bot.id, describe_error(e))
 
 
 async def sync_collections(
@@ -218,6 +274,7 @@ async def sync_collections(
     existing = {c.key: c for c in await template_collections(session, bot.id)}
     problems = []
     for d in drafts:
+        schemas: list[CollectionSchema] = []
         try:
             async with session.begin_nested():
                 schema = _schema_of(d, lang)
@@ -237,6 +294,7 @@ async def sync_collections(
                     problems.append(Problem(d.title, "kind_change"))
                     continue
                 old = collection_schema(c)
+                schemas = [schema, old]
                 merged = merge_schema(old, schema)
                 if merged != old:
                     await update_collection_schema(session, c, merged)
@@ -244,14 +302,18 @@ async def sync_collections(
                     c.title = {**c.title, lang: d.title}
                     await session.flush()
         except LimitReached as e:
-            if e.limit == "collections":
-                problems.append(Problem(d.title, "limit"))
-            else:
-                problems.append(Problem(d.title, "invalid", _detail(e)))
+            _log_problem(bot, d, e)
+            problems.append(Problem(d.title, "limit" if e.limit == "collections" else "plan_limit"))
         except SchemaChangeRejected as e:
-            problems.append(Problem(d.title, "breaks_records", _detail(e)))
+            _log_problem(bot, d, e)
+            label = _field_label(schemas, e.field, lang)
+            problems.append(Problem(d.title, "breaks_records", change=e.change, field=label))
+        except TooManyFields as e:
+            _log_problem(bot, d, e)
+            problems.append(Problem(d.title, "too_many_fields", hidden=e.hidden))
         except DataError as e:
-            problems.append(Problem(d.title, "invalid", _detail(e)))
+            _log_problem(bot, d, e)
+            problems.append(Problem(d.title, "invalid"))
         except Exception:
             log.exception("syncing collection %r of bot %s failed", d.key, bot.id)
             problems.append(Problem(d.title, "failed"))
