@@ -39,6 +39,9 @@ plans:
     knowledge_bytes: 1048576
     max_api_endpoints: 3     # per bot
     max_chain_steps: 5
+    max_data_collections: 5  # per bot (template) and per person per bot (made in chat)
+    max_data_records: 1000   # per bot: a person's personal records / all shared+group records
+    max_record_bytes: 4096
   paid:
     max_bots: 20
     daily_llm_messages: null # limited by credit balance only
@@ -50,3 +53,6 @@ plans:
     knowledge_bytes: 52428800
     max_api_endpoints: 20
     max_chain_steps: 5
+    max_data_collections: 30
+    max_data_records: 50000
+    max_record_bytes: 16384

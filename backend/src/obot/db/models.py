@@ -179,6 +179,92 @@ class ApiKeyValue(Base):
     value_encrypted: Mapped[bytes] = mapped_column(LargeBinary)
 
 
+class CollectionScope(enum.StrEnum):
+    # Each person has their own records (an expense book).
+    PERSONAL = "personal"
+    # Everyone writes, each reads their own; the bot's owner reads all (bookings).
+    SHARED = "shared"
+    # One space per group chat (a family shopping list).
+    GROUP = "group"
+
+
+class Collection(Base):
+    """A bot's typed container of JSON records (SPEC 8.8). Always accessed through obot.data."""
+
+    __tablename__ = "collections"
+    __table_args__ = (
+        UniqueConstraint("bot_id", "key", "created_by_user_id", postgresql_nulls_not_distinct=True),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(40))
+    title: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    scope: Mapped[CollectionScope] = mapped_column(
+        Enum(
+            CollectionScope,
+            native_enum=False,
+            length=16,
+            values_callable=lambda e: [m.value for m in e],
+        )
+    )
+    # None: part of the bot's template. Set: a personal collection that person made in chat.
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
+    # {"fields": [...]}; see obot.data.schema.CollectionSchema
+    schema: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    rules: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    # Notifications and reminders (P5-5).
+    events: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    schema_version: Mapped[int] = mapped_column(default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+
+
+class Record(Base):
+    """One JSON row of a collection. Always accessed through obot.data with a DataSpace."""
+
+    __tablename__ = "records"
+    __table_args__ = (
+        Index("ix_records_collection_author", "collection_id", "author_user_id"),
+        Index("ix_records_collection_chat", "collection_id", "tg_chat_id"),
+        Index("ix_records_data", "data", postgresql_using="gin"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    collection_id: Mapped[int] = mapped_column(ForeignKey("collections.id", ondelete="CASCADE"))
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
+    author_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    # The group chat of a group-scope record; None otherwise.
+    tg_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    schema_version: Mapped[int]
+    # Bumped on every change; the panel sends it back to detect concurrent edits.
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
+    # Soft delete; purged after Settings.deleted_record_retention_days.
+    deleted_at: Mapped[datetime | None]
+
+
+class RecordKey(Base):
+    """A record's values under one unique rule. The primary key is what makes the rule hold,
+    even for concurrent writers (SPEC 8.8)."""
+
+    __tablename__ = "record_keys"
+
+    collection_id: Mapped[int] = mapped_column(
+        ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The rule's field keys joined by commas, e.g. "date,time".
+    rule: Mapped[str] = mapped_column(String(400), primary_key=True)
+    # Where the rule applies: "u:<user id>" (personal), "all" (shared), "c:<chat id>" (group).
+    scope_key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    value_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("records.id", ondelete="CASCADE"), index=True)
+
+
 class UsageEvent(Base):
     __tablename__ = "usage_events"
     __table_args__ = (
