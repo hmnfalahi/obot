@@ -101,11 +101,15 @@ def render_card(lang: str, row: FactoryDraft, target_username: str | None) -> st
     return "\n".join(lines)
 
 
+def _problem_text(lang: str, p: Problem) -> str:
+    if p.reason == "breaks_records":
+        return t(lang, f"factory.change.{p.change}", field=p.field or "")
+    return t(lang, f"factory.problem.{p.reason}", hidden=p.hidden)
+
+
 def _data_problems(lang: str, problems: list[Problem]) -> str:
     listed = "\n".join(
-        f"• {html.escape(p.title)}: "
-        + html.escape(t(lang, f"factory.problem.{p.reason}", detail=p.detail or ""))
-        for p in problems
+        f"• {html.escape(p.title)}: {html.escape(_problem_text(lang, p))}" for p in problems
     )
     return t(lang, "factory.data_problems", problems=listed)
 
@@ -294,7 +298,7 @@ async def on_text(message: Message, session: AsyncSession, runtime: Runtime) -> 
 
     await message.answer(reply)
     if result.dropped_collections:
-        names = ", ".join(result.dropped_collections)
+        names = ("، " if lang == "fa" else ", ").join(result.dropped_collections)
         await message.answer(t(lang, "factory.dropped", names=names))
     await message.answer(
         render_card(lang, row, target_bot.username if target_bot else None),

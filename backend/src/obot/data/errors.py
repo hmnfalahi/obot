@@ -36,7 +36,17 @@ class InvalidSchema(DataError):
 
 
 class SchemaChangeRejected(DataError):
+    """`change` says what was refused, for wording it to people: removed | type_change |
+    unhide_required | currency_change | became_required | options_removed | limits_narrowed |
+    required_added | unique_added. `field` is the field's key (None for unique_added). The
+    message is for the model and logs."""
+
     code = "schema_change_rejected"
+
+    def __init__(self, message: str, *, change: str, field: str | None = None) -> None:
+        super().__init__(message)
+        self.change = change
+        self.field = field
 
 
 class InvalidQuery(DataError):

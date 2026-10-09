@@ -1,7 +1,12 @@
 import re
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from aiogram.methods import SendMessage
+from aiogram.types import CallbackQuery, Chat, Message, User
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -9,8 +14,11 @@ from pydantic_ai.models.test import TestModel
 
 from obot.billing.plans import Pricing
 from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
-from obot.data.repository import template_collections
+from obot.data import schema as schema_module
+from obot.data.repository import add_record, template_collections
+from obot.data.repository import collection_schema as schema_of
 from obot.db.models import DraftKind, DraftState
+from obot.factory.collections import sync_collections
 from obot.factory.designer import (
     BotDraft,
     DesignerOutput,
@@ -29,6 +37,8 @@ from obot.factory.drafts import (
     take_awaiting_draft,
     update_draft,
 )
+from obot.i18n import MESSAGES
+from obot.telegram import factory
 from obot.telegram.factory import render_card
 from tests.test_factory_collections import BOOKINGS
 
@@ -208,7 +218,7 @@ async def test_card_shows_the_data_section(session) -> None:
     card = render_card("fa", row, target_username=None)
 
     assert "📋" in card and "نوبت‌ها" in card
-    assert "همه ثبت می‌کنند، فقط شما همه را می‌بینید" in card
+    assert "همه ثبت می‌کنند، فقط تو همه را می‌بینی" in card
     assert "هر تاریخ + ساعت فقط یک بار" in card
 
 
@@ -248,7 +258,7 @@ async def test_design_drops_collections_that_stay_invalid() -> None:
     result = await design(_reply_with(bad), "x")
 
     assert [c.key for c in result.output.draft.collections] == ["b"]
-    assert result.dropped_collections == ["appointments"]
+    assert result.dropped_collections == ["نوبت‌ها"]  # titles, not keys
 
 
 async def test_design_keeps_the_fixed_collection_after_a_retry() -> None:
@@ -296,3 +306,63 @@ async def test_card_survives_and_escapes_collections(session) -> None:
 def test_the_model_cannot_see_or_set_the_dropped_note() -> None:
     assert "dropped_collections" not in DesignerOutput.model_json_schema()["properties"]
     assert "dropped_collections" not in DesignerOutput.model_fields
+
+
+async def test_saving_a_change_that_breaks_records_tells_the_owner_in_persian(
+    data_world, cipher, monkeypatch
+) -> None:
+    w = data_world
+    await sync_collections(w.session, w.pricing, w.bot, [BOOKINGS], "fa")
+    [c] = await template_collections(w.session, w.bot.id)
+    await add_record(
+        w.session,
+        w.pricing,
+        await w.space(w.alice),
+        c,
+        {"name": "Ali", "date": "2026-10-10", "time": "17:00"},
+    )
+    retyped = BOOKINGS.model_copy(
+        update={
+            "fields": [
+                f.model_copy(update={"type": "text"}) if f.key == "date" else f
+                for f in BOOKINGS.fields
+            ],
+            "allowed_hours": None,
+        }
+    )
+    row = await start_draft(
+        w.session,
+        w.owner,
+        DENTIST.model_copy(update={"collections": [retyped]}),
+        last_reply=None,
+        target=w.bot,
+    )
+    monkeypatch.setattr(factory, "sync_profile", AsyncMock())
+    client = AsyncMock()
+    owner = User(id=1001, is_bot=False, first_name="Owner", language_code="fa")
+    message = Message(
+        message_id=3, date=datetime.now(UTC), chat=Chat(id=1001, type="private"), text="card"
+    ).as_(client)
+    query = CallbackQuery(
+        id="q", from_user=owner, chat_instance="c", data=f"draft:save:{row.id}", message=message
+    ).as_(client)
+
+    await factory.on_save(query, w.session, SimpleNamespace(pricing=w.pricing, cipher=cipher))
+
+    sent = [m.text for (m,), _ in client.await_args_list if isinstance(m, SendMessage)]
+    assert sent[-1] == (
+        "⚠️ این فهرست‌ها تغییر نکردند:\n"
+        "• نوبت‌ها: نوع «تاریخ» عوض نمی‌شود چون داده دارد؛ یک فیلد تازه اضافه کن"
+    )
+    assert schema_of(c).field("date").type == "date"
+
+
+def test_every_refused_change_and_problem_has_words_in_both_languages() -> None:
+    changes = re.findall(r'change="(\w+)"', Path(schema_module.__file__).read_text())
+    assert len(set(changes)) == 9
+    reasons = ["limit", "plan_limit", "kind_change", "too_many_fields", "invalid", "failed"]
+    for lang in ("fa", "en"):
+        for change in changes:
+            assert f"factory.change.{change}" in MESSAGES[lang]
+        for reason in reasons:
+            assert f"factory.problem.{reason}" in MESSAGES[lang]

@@ -42,18 +42,41 @@ def test_field_text() -> None:
 def test_rules_in_plain_words() -> None:
     assert rules_text(BOOKINGS, "fa") == [
         "هر تاریخ + ساعت فقط یک بار",
-        "شنبه، یکشنبه، دوشنبه، سه‌شنبه، چهارشنبه ۱۶:۰۰ تا ۲۰:۰۰؛ پنجشنبه ۰۹:۰۰ تا ۱۲:۰۰",
+        "شنبه تا چهارشنبه ۱۶:۰۰ تا ۲۰:۰۰؛ پنجشنبه ۰۹:۰۰ تا ۱۲:۰۰",
     ]
     assert rules_text(BOOKINGS, "en") == [
         "one per Date + Time",
-        "Mon, Tue, Wed, Sat, Sun 16:00–20:00; Thu 09:00–12:00",
+        "Mon–Wed, Sat, Sun 16:00–20:00; Thu 09:00–12:00",
     ]
 
 
 def test_collection_summary() -> None:
     text = collection_text("نوبت‌ها", CollectionScope.SHARED, BOOKINGS, "fa")
-    assert text.splitlines()[0] == "• نوبت‌ها — همه ثبت می‌کنند، فقط شما همه را می‌بینید"
+    assert text.splitlines()[0] == "• نوبت‌ها — همه ثبت می‌کنند، فقط تو همه را می‌بینی"
     assert "نام (متن)" in text and "Old" not in text
     assert "هر تاریخ + ساعت فقط یک بار" in text
     personal = collection_text("Expenses", CollectionScope.PERSONAL, BOOKINGS, "en")
     assert personal.splitlines()[0] == "• Expenses — each user keeps their own"
+
+
+def test_only_runs_of_three_or_more_days_become_ranges() -> None:
+    schema = BOOKINGS.model_copy(
+        update={
+            "rules": BOOKINGS.rules.model_copy(
+                update={
+                    "unique": [],
+                    "allowed_hours": BOOKINGS.rules.allowed_hours.model_copy(
+                        update={
+                            "windows": [
+                                BOOKINGS.rules.allowed_hours.windows[0].model_copy(
+                                    update={"weekdays": [0, 2, 4, 5]}
+                                )
+                            ]
+                        }
+                    ),
+                }
+            )
+        }
+    )
+    assert rules_text(schema, "en") == ["Mon, Wed, Fri, Sat 16:00–20:00"]
+    assert rules_text(schema, "fa") == ["شنبه، دوشنبه، چهارشنبه، جمعه ۱۶:۰۰ تا ۲۰:۰۰"]

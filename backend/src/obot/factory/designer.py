@@ -110,11 +110,12 @@ def check_output(output: DesignerOutput) -> None:
 
 
 def drop_invalid_collections(output: DesignerOutput) -> tuple[DesignerOutput, list[str]]:
-    """The output without the collections obot.data would refuse, and the dropped keys."""
+    """The output without the collections obot.data would refuse, and the titles of the
+    dropped ones (one per key)."""
     draft = output.draft
     if draft is None or not _problems(draft):
         return output, []
-    kept, dropped, seen = [], [], set()
+    kept, dropped, seen, dropped_keys = [], [], set(), set()
     for c in draft.collections:
         try:
             to_schema(c, draft.language)
@@ -124,8 +125,9 @@ def drop_invalid_collections(output: DesignerOutput) -> tuple[DesignerOutput, li
         seen.add(c.key)
         if ok:
             kept.append(c)
-        elif c.key not in dropped:
-            dropped.append(c.key)
+        elif c.key not in dropped_keys:
+            dropped_keys.add(c.key)
+            dropped.append(c.title)
     trimmed = output.model_copy(update={"draft": draft.model_copy(update={"collections": kept})})
     return trimmed, dropped
 
@@ -142,7 +144,7 @@ class DesignerResult:
     model_name: str
     input_tokens: int
     output_tokens: int
-    dropped_collections: list[str] = field(default_factory=list)
+    dropped_collections: list[str] = field(default_factory=list)  # titles
 
 
 def _instructions() -> str:

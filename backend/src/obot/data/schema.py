@@ -334,27 +334,51 @@ def check_evolution(old: CollectionSchema, new: CollectionSchema, *, has_records
     for f in old.fields:
         n = new_fields.get(f.key)
         if n is None:
-            raise SchemaChangeRejected(f"{f.key}: fields cannot be removed; hide it instead")
+            raise SchemaChangeRejected(
+                f"{f.key}: fields cannot be removed; hide it instead", change="removed", field=f.key
+            )
         if n.type != f.type:
-            raise SchemaChangeRejected(f"{f.key}: the type of a field cannot change")
+            raise SchemaChangeRejected(
+                f"{f.key}: the type of a field cannot change", change="type_change", field=f.key
+            )
         if f.hidden and not n.hidden and n.required:
             raise SchemaChangeRejected(
-                f"{f.key}: a hidden field cannot become visible and required"
+                f"{f.key}: a hidden field cannot become visible and required",
+                change="unhide_required",
+                field=f.key,
             )
         if n.type == FieldType.MONEY and n.currency != f.currency:
-            raise SchemaChangeRejected(f"{f.key}: the currency of a field cannot change")
+            raise SchemaChangeRejected(
+                f"{f.key}: the currency of a field cannot change",
+                change="currency_change",
+                field=f.key,
+            )
         if n.required and not f.required:
-            raise SchemaChangeRejected(f"{f.key}: an existing field cannot become required")
+            raise SchemaChangeRejected(
+                f"{f.key}: an existing field cannot become required",
+                change="became_required",
+                field=f.key,
+            )
         if set(f.options) - set(n.options):
-            raise SchemaChangeRejected(f"{f.key}: choice options can only be added")
+            raise SchemaChangeRejected(
+                f"{f.key}: choice options can only be added", change="options_removed", field=f.key
+            )
         if n.min is not None and (f.min is None or n.min > f.min):
-            raise SchemaChangeRejected(f"{f.key}: limits can only be widened")
+            raise SchemaChangeRejected(
+                f"{f.key}: limits can only be widened", change="limits_narrowed", field=f.key
+            )
         if n.max is not None and (f.max is None or n.max < f.max):
-            raise SchemaChangeRejected(f"{f.key}: limits can only be widened")
+            raise SchemaChangeRejected(
+                f"{f.key}: limits can only be widened", change="limits_narrowed", field=f.key
+            )
     old_keys = old.field_map()
     for n in new.fields:
         if n.key not in old_keys and n.required:
-            raise SchemaChangeRejected(f"{n.key}: new fields must be optional")
+            raise SchemaChangeRejected(
+                f"{n.key}: new fields must be optional", change="required_added", field=n.key
+            )
     old_unique = {tuple(g) for g in old.rules.unique}
     if any(tuple(g) not in old_unique for g in new.rules.unique):
-        raise SchemaChangeRejected("unique rules cannot be added once a collection has records")
+        raise SchemaChangeRejected(
+            "unique rules cannot be added once a collection has records", change="unique_added"
+        )
