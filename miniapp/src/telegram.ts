@@ -18,6 +18,7 @@ interface WebApp {
   openInvoice(url: string, callback?: (status: 'paid' | 'cancelled' | 'failed' | 'pending') => void): void
   showAlert(message: string): void
   showConfirm(message: string, callback: (ok: boolean) => void): void
+  isVersionAtLeast?(version: string): boolean
   downloadFile?(params: { url: string; file_name: string }, callback?: (accepted: boolean) => void): void
   BackButton: BackButton
   HapticFeedback?: { notificationOccurred(type: 'success' | 'error' | 'warning'): void }
@@ -69,6 +70,14 @@ export function openInvoice(url: string): Promise<string> {
 
 /** Telegram's download sheet for a file at `url`; a new browser tab outside Telegram. */
 export function downloadFile(url: string, fileName: string): void {
-  if (webApp?.initData && webApp.downloadFile) webApp.downloadFile({ url, file_name: fileName })
-  else window.open(url, '_blank')
+  // downloadFile came in Bot API 8.0; older clients throw on it.
+  if (webApp?.initData && webApp.downloadFile && webApp.isVersionAtLeast?.('8.0')) {
+    try {
+      webApp.downloadFile({ url, file_name: fileName })
+      return
+    } catch {
+      // fall back to a browser tab
+    }
+  }
+  window.open(url, '_blank')
 }
