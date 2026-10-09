@@ -6,6 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.db.models import BotChat
 
 
+async def get_membership(session: AsyncSession, bot_id: int, tg_chat_id: int) -> BotChat | None:
+    return await session.scalar(
+        select(BotChat).where(BotChat.bot_id == bot_id, BotChat.tg_chat_id == tg_chat_id)
+    )
+
+
 async def upsert_membership(
     session: AsyncSession,
     bot_id: int,
