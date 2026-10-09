@@ -321,6 +321,8 @@ async def _locked_record(
     if record is None:
         raise RecordNotFound(record_id)
     if not can_change(space, c, record):
+        if c.scope == CollectionScope.GROUP:
+            raise NotAllowed("only the person who added this or a group admin can change it")
         raise NotAllowed("only the author can change this record")
     return record
 

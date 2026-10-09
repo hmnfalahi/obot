@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from obot.data.format import describe_group_only
 from obot.data.query import find_records
 from obot.data.repository import (
     collection_schema,
@@ -11,7 +12,7 @@ from obot.data.repository import (
     update_collection_schema,
 )
 from obot.data.schema import CollectionSchema
-from obot.data.service import DataService, Definition, apply_definition
+from obot.data.service import DataService, Definition, GroupChat, apply_definition
 from obot.db.models import CollectionScope
 
 EXPENSES = CollectionSchema.model_validate(
@@ -503,3 +504,104 @@ async def test_template_with_same_key_hides_the_proposal_target(data_world) -> N
     async with sessions() as s:
         with pytest.raises(DataError, match="no longer available"):
             await apply_definition(s, w.pricing, p)
+
+
+SHOPPING = CollectionSchema.model_validate(
+    {"fields": [{"key": "item", "label": {"en": "Item"}, "type": "text", "required": True}]}
+)
+
+
+@pytest.fixture
+async def family(world):
+    w = world
+    await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="shopping",
+        title={"en": "Shopping"},
+        scope=CollectionScope.GROUP,
+        schema=SHOPPING,
+    )
+    await w.session.commit()
+    return w
+
+
+def in_group(w, user, chat_id=-100, admin=False, **kwargs):
+    asked = AsyncMock(return_value=admin)
+    s = service(w, user, group=GroupChat(chat_id, asked, title="Family"), **kwargs)
+    return s, asked
+
+
+def record_id(text: str) -> int:
+    return int(text.split("#")[1].split(":")[0])
+
+
+async def test_a_group_sees_only_its_group_collections(family) -> None:
+    w = family
+    alice, _ = in_group(w, w.alice)
+    note = await alice.note(w.session)
+    assert "shopping" in note and "expenses" not in note and "bookings" not in note
+    assert "admin" in note  # the model knows who may change what
+    private_note = await service(w, w.alice).note(w.session)
+    assert "shopping" not in private_note
+
+    assert (await alice.add("shopping", {"item": "milk"})).startswith("OK")
+    assert "no collection" in await alice.add("expenses", {"amount": 1})
+    assert "no collection" in await service(w, w.alice).find("shopping")
+
+
+async def test_group_x_does_not_see_group_y(family) -> None:
+    w = family
+    x, _ = in_group(w, w.alice, chat_id=-100)
+    y, _ = in_group(w, w.alice, chat_id=-200)
+    await x.add("shopping", {"item": "milk"})
+    assert "milk" in await x.find("shopping")
+    assert "milk" not in await y.find("shopping")
+    bob_x, _ = in_group(w, w.bob, chat_id=-100)
+    assert "milk" in await bob_x.find("shopping")  # every member reads the group's list
+
+
+async def test_members_change_their_own_items_and_admins_any(family) -> None:
+    w = family
+    alice, alice_asked = in_group(w, w.alice)
+    saved = await alice.add("shopping", {"item": "milk"})
+    await alice.find("shopping")
+    alice_asked.assert_not_awaited()  # adding and reading never ask Telegram
+    rid = record_id(saved)
+
+    bob, _ = in_group(w, w.bob)
+    refused = await bob.update("shopping", rid, {"item": "bread"})
+    assert refused.startswith("ERROR") and "group admin" in refused
+
+    admin, admin_asked = in_group(w, w.bob, admin=True)
+    assert (await admin.update("shopping", rid, {"item": "bread"})).startswith("OK")
+    admin_asked.assert_awaited()
+
+
+async def test_group_delete_goes_to_confirmation_for_author_or_admin(family) -> None:
+    w = family
+    confirm = AsyncMock(return_value="asked")
+    alice, _ = in_group(w, w.alice, confirm_delete=confirm)
+    rid = record_id(await alice.add("shopping", {"item": "milk"}))
+
+    bob, _ = in_group(w, w.bob, confirm_delete=confirm)
+    assert (await bob.delete("shopping", rid)).startswith("ERROR")
+    confirm.assert_not_awaited()
+
+    admin, _ = in_group(w, w.bob, admin=True, confirm_delete=confirm)
+    assert await admin.delete("shopping", rid) == "asked"
+    assert await alice.delete("shopping", rid) == "asked"
+
+
+async def test_private_chats_only_name_the_group_collections(family) -> None:
+    w = family
+    hint = await service(w, w.alice).group_hint(w.session)
+    assert "Shopping" in hint and "group" in hint
+    alice, _ = in_group(w, w.alice)
+    assert await alice.group_hint(w.session) is None
+
+
+async def test_no_group_hint_without_group_collections(world) -> None:
+    assert await service(world, world.alice).group_hint(world.session) is None
+    assert describe_group_only([]) is None

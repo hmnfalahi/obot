@@ -89,7 +89,10 @@ def _describe_scope(c: Collection, space: DataSpace) -> str:
                 "shared: this user sees only this user's own records; to see what anyone has "
                 "taken, call data_find with availability=true (public fields only)"
             )
-    return "group: shared by the members of this group"
+    return (
+        "group: one list for this group, read by all its members; each member changes or "
+        "deletes their own records, group admins anyone's"
+    )
 
 
 def _zone(c: Collection, space: DataSpace) -> str:
@@ -138,6 +141,17 @@ def describe_collections(
     if can_define:
         lines.append(DEFINE_HINT)
     return "\n".join(lines)
+
+
+def describe_group_only(collections: list[Collection]) -> str | None:
+    """For a private chat: the group collections that exist but work only in groups."""
+    if not collections:
+        return None
+    titles = ", ".join(" / ".join(dict.fromkeys(c.title.values())) or c.key for c in collections)
+    return (
+        f"These lists belong to the groups you are in and are not available in this private "
+        f"chat: {titles}. If the user asks about them, tell them to mention you in that group."
+    )
 
 
 def format_records(records: list[Record], tz: ZoneInfo, hidden: Iterable[str] = ()) -> str:
