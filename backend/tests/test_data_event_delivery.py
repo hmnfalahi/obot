@@ -338,3 +338,53 @@ async def test_an_event_that_breaks_its_transaction_does_not_block_the_rest(
     first = await w.session.scalar(select(RecordEvent).order_by(RecordEvent.id))
     assert (first.attempts, first.sent_at) == (1, None)
     assert await outcomes(w) == [("create", None), ("create", "sent")]
+
+
+async def test_group_record_messages_name_the_group(data_world) -> None:
+    from obot.chat.membership import upsert_membership
+    from obot.data.repository import update_record
+
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    c = await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="shopping",
+        title={"fa": "خرید", "en": "Shopping"},
+        scope=CollectionScope.GROUP,
+        schema=CollectionSchema.model_validate(
+            {"fields": [{"key": "item", "label": {"fa": "قلم", "en": "Item"}, "type": "text"}]}
+        ),
+    )
+    await set_collection_events(
+        w.session,
+        c,
+        CollectionEvents.model_validate({"notify": [{"on": "update", "to": "author"}]}),
+    )
+    await upsert_membership(
+        w.session,
+        w.bot.id,
+        -100,
+        chat_type="supergroup",
+        title="Family",
+        is_member=True,
+        is_admin=True,
+    )
+    r = await add_record(
+        w.session, w.pricing, await w.space(w.alice, tg_chat_id=-100), c, {"item": "milk"}
+    )
+    admin = await w.space(w.bob, tg_chat_id=-100, is_group_admin=True)
+    await update_record(w.session, w.pricing, admin, c, r.id, {"item": "bread"})
+    await w.session.commit()
+    sender = AsyncMock()
+    runtime = SimpleNamespace(
+        sessionmaker=async_sessionmaker(w.session.bind, expire_on_commit=False),
+        sender=sender,
+        transport=SimpleNamespace(client=MagicMock(return_value=AsyncMock())),
+    )
+
+    assert await deliver_data_events(runtime) == 1
+    call = sender.send_text.await_args
+    assert call.args[1] == 2002  # Alice, privately
+    assert "Family" in call.args[2] and "bread" in call.args[2]

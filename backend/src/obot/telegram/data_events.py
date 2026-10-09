@@ -16,10 +16,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from obot.bots.access import can_use
+from obot.chat.membership import get_membership
 from obot.config import get_settings
 from obot.data.describe import label_of, record_lines
 from obot.data.events import (
     claim_due_reminders,
+    event_chat,
     mark_done,
     mark_failed,
     pending_events,
@@ -121,6 +123,7 @@ async def _deliver(session, runtime: Runtime, ev) -> str | None:
         return LATER  # the bot is not running right now
     c = await session.get(Collection, ev.collection_id)
     lang = lang_of(user.language)
+    # Group records use the owner's zone, like shared ones.
     tz = ZoneInfo(user.timezone if c.scope == CollectionScope.PERSONAL else bot.owner.timezone)
     text = t(
         lang,
@@ -128,6 +131,11 @@ async def _deliver(session, runtime: Runtime, ev) -> str | None:
         title=label_of(c.title, lang, c.key),
         record=record_lines(collection_schema(c), ev.data, lang, tz),
     )
+    if c.scope == CollectionScope.GROUP:
+        chat_id = await event_chat(session, ev)
+        membership = await get_membership(session, bot.id, chat_id) if chat_id else None
+        if membership is not None and membership.title:
+            text += "\n" + t(lang, "data.event.in_group", group=membership.title)
     try:
         await runtime.sender.send_text(client, user.tg_user_id, text, group=False)
     except TelegramForbiddenError:
