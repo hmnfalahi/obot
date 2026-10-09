@@ -26,6 +26,7 @@ from obot.data.errors import (
 KEY_PATTERN = r"^[a-z][a-z0-9_]{0,39}$"
 MAX_FIELDS = 30
 MAX_TEXT = 2000
+MAX_RULE_KEY = 400  # RecordKey.rule is String(400)
 
 _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 _TRUE = {"true", "yes", "y", "1", "بله", "آره", "اره", "هست"}
@@ -83,6 +84,10 @@ class FieldDef(BaseModel):
             raise ValueError(f"{self.key}: choice fields, and only they, have options")
         if (self.min is not None or self.max is not None) and self.type not in NUMERIC_TYPES:
             raise ValueError(f"{self.key}: only number and money fields have min/max")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError(f"{self.key}: min is above max")
+        if len(set(self.options)) != len(self.options):
+            raise ValueError(f"{self.key}: duplicate options")
         return self
 
 
@@ -116,6 +121,12 @@ class Rules(BaseModel):
     def _non_empty(cls, groups: list[list[str]]) -> list[list[str]]:
         if any(not g for g in groups):
             raise ValueError("a unique rule needs at least one field")
+        if any(len(set(g)) != len(g) for g in groups):
+            raise ValueError("a unique rule repeats a field")
+        if len({frozenset(g) for g in groups}) != len(groups):
+            raise ValueError("duplicate unique rules")
+        if any(len(",".join(g)) > MAX_RULE_KEY for g in groups):
+            raise ValueError("a unique rule is too long")
         return groups
 
 
@@ -326,6 +337,12 @@ def check_evolution(old: CollectionSchema, new: CollectionSchema, *, has_records
             raise SchemaChangeRejected(f"{f.key}: fields cannot be removed; hide it instead")
         if n.type != f.type:
             raise SchemaChangeRejected(f"{f.key}: the type of a field cannot change")
+        if f.hidden and not n.hidden and n.required:
+            raise SchemaChangeRejected(
+                f"{f.key}: a hidden field cannot become visible and required"
+            )
+        if n.type == FieldType.MONEY and n.currency != f.currency:
+            raise SchemaChangeRejected(f"{f.key}: the currency of a field cannot change")
         if n.required and not f.required:
             raise SchemaChangeRejected(f"{f.key}: an existing field cannot become required")
         if set(f.options) - set(n.options):

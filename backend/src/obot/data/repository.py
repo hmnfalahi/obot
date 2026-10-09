@@ -33,6 +33,7 @@ from obot.data.space import (
     can_change,
     payer,
     record_scope_key,
+    require_visible,
     row_filter,
     tz_for,
     visible,
@@ -48,6 +49,19 @@ def _store_schema(c: Collection, schema: CollectionSchema) -> None:
     dumped = schema.model_dump(mode="json")
     c.schema = {"fields": dumped["fields"]}
     c.rules = dumped["rules"]
+
+
+def _check_shared_unique(scope: CollectionScope, schema: CollectionSchema) -> None:
+    """In a shared collection a duplicate error shows other people's values, so every field
+    of a unique rule must be public."""
+    if scope != CollectionScope.SHARED:
+        return
+    for group in schema.rules.unique:
+        for key in group:
+            if not schema.field_map()[key].public:
+                raise InvalidSchema(
+                    f"{key}: fields of a unique rule in a shared collection must be public"
+                )
 
 
 async def create_collection(
@@ -68,6 +82,7 @@ async def create_collection(
         raise NotAllowed("only personal collections can be made in chat")
     if not re.fullmatch(KEY_PATTERN, key):
         raise InvalidSchema(f"{key!r} is not a valid collection key")
+    _check_shared_unique(scope, schema)
     plan_user = created_by or await session.get(User, bot.owner_id)
     count = await session.scalar(
         select(func.count(Collection.id)).where(
@@ -79,8 +94,9 @@ async def create_collection(
     )
     if count >= pricing.plan(plan_user.plan).max_data_collections:
         raise LimitReached("collections")
-    # A template key clashes with template keys; a personal key also with the template's,
-    # so a person's own collection never shadows a template one.
+    # A template key clashes with template keys; a personal key also with the template's and
+    # the person's own. A template made later can still share a key with an existing personal
+    # collection; list_collections then hides the personal one.
     owners = [Collection.created_by_user_id.is_(None)]
     if created_by is not None:
         owners.append(Collection.created_by_user_id == created_by.id)
@@ -107,6 +123,8 @@ async def create_collection(
 
 
 async def list_collections(session: AsyncSession, space: DataSpace) -> list[Collection]:
+    """Template collections first, then the person's own; a personal collection whose key a
+    template also uses is hidden, so the template wins. Each group is ordered by id."""
     rows = await session.scalars(
         select(Collection)
         .where(
@@ -116,7 +134,10 @@ async def list_collections(session: AsyncSession, space: DataSpace) -> list[Coll
         )
         .order_by(Collection.id)
     )
-    return [c for c in rows if visible(space, c)]
+    seen = [c for c in rows if visible(space, c)]
+    templates = [c for c in seen if c.created_by_user_id is None]
+    taken = {c.key for c in templates}
+    return templates + [c for c in seen if c.created_by_user_id is not None and c.key not in taken]
 
 
 async def get_collection(session: AsyncSession, space: DataSpace, key: str) -> Collection:
@@ -134,6 +155,7 @@ async def update_collection_schema(
     has_records = await session.scalar(
         select(exists().where(Record.collection_id == c.id, Record.deleted_at.is_(None)))
     )
+    _check_shared_unique(c.scope, new)
     check_evolution(collection_schema(c), new, has_records=has_records)
     _store_schema(c, new)
     c.schema_version += 1
@@ -153,6 +175,7 @@ async def delete_collection(session: AsyncSession, c: Collection) -> None:
 async def get_record(
     session: AsyncSession, space: DataSpace, c: Collection, record_id: int
 ) -> Record:
+    require_visible(space, c)
     record = await session.scalar(
         select(Record).where(Record.id == record_id, *row_filter(space, c))
     )
@@ -212,6 +235,7 @@ async def _claim_keys(
 async def add_record(
     session: AsyncSession, pricing: Pricing, space: DataSpace, c: Collection, data: dict
 ) -> Record:
+    require_visible(space, c)
     schema = collection_schema(c)
     tz = tz_for(space, c)
     values = validate_record(schema, data, tz)
@@ -236,6 +260,7 @@ async def add_record(
 async def _locked_record(
     session: AsyncSession, space: DataSpace, c: Collection, record_id: int
 ) -> Record:
+    require_visible(space, c)
     record = await session.scalar(
         select(Record).where(Record.id == record_id, *row_filter(space, c)).with_for_update()
     )
@@ -257,7 +282,9 @@ async def update_record(
     expected_version: int | None = None,
 ) -> Record:
     """Merge `changes` into the record. The row is locked, so concurrent updates never lose
-    each other's fields; `expected_version` (from the panel) refuses edits of a stale copy."""
+    each other's fields; `expected_version` (from the panel) refuses edits of a stale copy.
+    After an error the passed or returned ORM object may be expired: keep the record id and
+    fetch the record again."""
     record = await _locked_record(session, space, c, record_id)
     if expected_version is not None and record.version != expected_version:
         raise StaleRecord()

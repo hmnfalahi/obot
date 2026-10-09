@@ -269,3 +269,45 @@ def test_fullwidth_digit_phone_is_rejected() -> None:
             TEHRAN,
         )
     assert [e.field for e in caught.value.errors] == ["phone"]
+
+
+def _schema(fields, rules=None) -> dict:
+    return {"fields": fields, "rules": rules or {}}
+
+
+def _text(key: str, **extra) -> dict:
+    return {"key": key, "label": {"en": key}, "type": "text", **extra}
+
+
+def test_bad_unique_rules_are_refused() -> None:
+    long_keys = [chr(97 + i) * 40 for i in range(11)]  # joined: 450 characters
+    fields = [_text("a"), _text("b"), *[_text(k) for k in long_keys]]
+    for unique in ([["a", "a"]], [["a", "b"], ["a", "b"]], [["a", "b"], ["b", "a"]], [long_keys]):
+        with pytest.raises(ValidationError):
+            CollectionSchema.model_validate(_schema(fields, {"unique": unique}))
+
+
+def test_bad_field_limits_and_options_are_refused() -> None:
+    number = {"key": "n", "label": {"en": "N"}, "type": "number"}
+    with pytest.raises(ValidationError):
+        CollectionSchema.model_validate(_schema([{**number, "min": "5", "max": "1"}]))
+    CollectionSchema.model_validate(_schema([{**number, "min": "5", "max": "5"}]))
+    choice = {"key": "c", "label": {"en": "C"}, "type": "choice"}
+    with pytest.raises(ValidationError):
+        CollectionSchema.model_validate(_schema([{**choice, "options": ["a", "a"]}]))
+
+
+def test_evolution_rejects_visible_required_and_currency_change() -> None:
+    money = {"key": "m", "label": {"en": "M"}, "type": "money", "currency": "IRT"}
+    old = CollectionSchema.model_validate(_schema([_text("t", hidden=True), money]))
+
+    def new(**edit) -> CollectionSchema:
+        return CollectionSchema.model_validate(
+            _schema([_text("t", **edit.get("t", {})), {**money, **edit.get("m", {})}])
+        )
+
+    check_evolution(old, new(t={"hidden": False}), has_records=True)
+    with pytest.raises(SchemaChangeRejected):
+        check_evolution(old, new(t={"required": True}), has_records=True)
+    with pytest.raises(SchemaChangeRejected):
+        check_evolution(old, new(m={"currency": "USD"}), has_records=True)

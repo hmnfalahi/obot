@@ -245,3 +245,55 @@ async def test_purge_job_commits(data_world) -> None:
 
     w.session.expunge_all()
     assert await w.session.get(Record, r.id) is None
+
+
+async def other_bot_world(w, cipher):
+    from obot.bots.service import ManagedBotInfo, register_managed_bot
+    from obot.bots.users import join_bot
+    from obot.data.space import space_for
+
+    async def fetch_token(_: int) -> str:
+        return "t"
+
+    other = (
+        await register_managed_bot(
+            w.session, cipher, fetch_token, 1001, ManagedBotInfo(78, "datac", "C"), 10
+        )
+    ).bot
+    user, _ = await join_bot(w.session, other, 2002, "fa")
+    await w.session.flush()
+    return await space_for(w.session, other, user)
+
+
+async def test_data_layer_enforces_visibility(data_world, cipher) -> None:
+    from obot.data.errors import CollectionNotFound
+    from obot.data.query import Metric, availability, find_records, summarize
+
+    w = data_world
+    personal = await collection(w, "spend", CollectionScope.PERSONAL, EXPENSES)
+    group = await collection(w, "list", CollectionScope.GROUP, EXPENSES)
+    shared = await collection(w, "slots", CollectionScope.SHARED, BOOKINGS)
+    private = await w.space(w.alice)
+    in_group = await w.space(w.alice, tg_chat_id=-100)
+    mine = await add_record(w.session, w.pricing, private, personal, {"amount": 5})
+
+    with pytest.raises(CollectionNotFound):
+        await add_record(w.session, w.pricing, in_group, personal, {"amount": 5})
+    with pytest.raises(CollectionNotFound):
+        await find_records(w.session, in_group, personal)
+    with pytest.raises(CollectionNotFound):
+        await summarize(w.session, in_group, personal, Metric.COUNT)
+    with pytest.raises(CollectionNotFound):
+        await get_record(w.session, in_group, personal, mine.id)
+    with pytest.raises(CollectionNotFound):
+        await update_record(w.session, w.pricing, in_group, personal, mine.id, {"amount": 6})
+    with pytest.raises(CollectionNotFound):
+        await delete_record(w.session, in_group, personal, mine.id)
+    with pytest.raises(CollectionNotFound):
+        await add_record(w.session, w.pricing, private, group, {"amount": 5})
+    with pytest.raises(CollectionNotFound):
+        await availability(w.session, in_group, shared)
+
+    foreign = await other_bot_world(w, cipher)
+    with pytest.raises(CollectionNotFound):
+        await find_records(w.session, foreign, personal)

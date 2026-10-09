@@ -146,3 +146,52 @@ async def test_schema_update_checks_evolution_only_with_records(data_world) -> N
     await update_collection_schema(w.session, c, other)  # no records yet: anything goes
     assert collection_schema(c) == other
     # Rejection once records exist is covered in test_data_records.py.
+
+
+async def test_template_hides_a_personal_collection_with_its_key(data_world) -> None:
+    w = data_world
+    mine = await make(w, "notes", CollectionScope.PERSONAL, created_by=w.alice)
+    template = await make(w, "notes", CollectionScope.PERSONAL)
+    other = await make(w, "weight", CollectionScope.PERSONAL, created_by=w.alice)
+    alice = await w.space(w.alice)
+
+    listed = await list_collections(w.session, alice)
+    assert [c.id for c in listed] == [template.id, other.id]
+    assert mine not in listed
+    assert (await get_collection(w.session, alice, "notes")).id == template.id
+
+
+async def test_shared_unique_rules_need_public_fields(data_world) -> None:
+    w = data_world
+    private = CollectionSchema.model_validate(
+        {
+            "fields": [
+                {"key": "name", "label": {"en": "N"}, "type": "text"},
+                {"key": "d", "label": {"en": "D"}, "type": "date", "public": True},
+            ],
+            "rules": {"unique": [["d", "name"]]},
+        }
+    )
+    with pytest.raises(InvalidSchema):
+        await create_collection(
+            w.session,
+            w.pricing,
+            bot=w.bot,
+            key="slots",
+            title={"en": "s"},
+            scope=CollectionScope.SHARED,
+            schema=private,
+        )
+    # Fine where nobody else's records are visible.
+    await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="mine",
+        title={"en": "m"},
+        scope=CollectionScope.PERSONAL,
+        schema=private,
+    )
+    shared = await make(w, "slots", CollectionScope.SHARED)
+    with pytest.raises(InvalidSchema):
+        await update_collection_schema(w.session, shared, private)
