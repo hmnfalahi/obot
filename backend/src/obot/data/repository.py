@@ -147,6 +147,16 @@ async def get_collection(session: AsyncSession, space: DataSpace, key: str) -> C
     raise CollectionNotFound(key)
 
 
+async def collection_by_id(
+    session: AsyncSession, space: DataSpace, collection_id: int
+) -> Collection:
+    """A collection by id, e.g. from a button; only if the space can see it."""
+    c = await session.get(Collection, collection_id)
+    if c is None or not visible(space, c):
+        raise CollectionNotFound(str(collection_id))
+    return c
+
+
 async def update_collection_schema(
     session: AsyncSession, c: Collection, new: CollectionSchema
 ) -> None:
