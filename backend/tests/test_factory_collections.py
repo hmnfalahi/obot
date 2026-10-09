@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 
 from obot.data.errors import InvalidSchema
@@ -121,3 +123,67 @@ async def test_sync_respects_the_owners_plan(data_world) -> None:
     problems = await sync_collections(w.session, w.pricing, w.bot, [BOOKINGS, second], "fa")
 
     assert len(problems) == 1 and problems[0].startswith("لیست انتظار: ")
+
+
+async def test_sync_too_many_fields_is_one_problem(data_world) -> None:
+    w = data_world
+    await sync_collections(w.session, w.pricing, w.bot, [BOOKINGS], "fa")
+    data = BOOKINGS.model_dump()
+    data["fields"] = [{"key": f"f{i}", "label": f"f{i}", "type": "text"} for i in range(28)] + [
+        data["fields"][2],
+        data["fields"][3],
+    ]
+    data["unique"] = [["date", "time"]]
+    big = CollectionDraft.model_validate(data)
+    other = BOOKINGS.model_copy(update={"key": "waitlist", "title": "لیست انتظار"})
+
+    problems = await sync_collections(w.session, w.pricing, w.bot, [big, other], "fa")
+
+    assert len(problems) == 1
+    assert (
+        problems[0].startswith("نوبت‌ها: ") and "too many fields, including 2 hidden" in problems[0]
+    )
+    keys = sorted(c.key for c in await template_collections(w.session, w.bot.id))
+    assert keys == ["appointments", "waitlist"]
+
+
+async def test_sync_keeps_min_max_and_unhides(data_world) -> None:
+    w = data_world
+    draft = CollectionDraft.model_validate(
+        {
+            "key": "expenses",
+            "title": "خرج",
+            "scope": "personal",
+            "fields": [
+                {"key": "amount", "label": "مبلغ", "type": "money", "currency": "IRT"},
+                {"key": "note", "label": "یادداشت", "type": "text"},
+            ],
+        }
+    )
+    await sync_collections(w.session, w.pricing, w.bot, [draft], "fa")
+    [c] = await template_collections(w.session, w.bot.id)
+    schema = schema_of(c)
+    stored = schema.field("amount").model_copy(update={"min": Decimal(1), "max": Decimal(9)})
+    from obot.data.repository import update_collection_schema
+
+    await update_collection_schema(
+        w.session, c, schema.model_copy(update={"fields": [stored, schema.field("note")]})
+    )
+
+    no_note = draft.model_copy(
+        update={"fields": [f.model_copy(update={"currency": None}) for f in draft.fields[:1]]}
+    )
+    assert await sync_collections(w.session, w.pricing, w.bot, [no_note], "fa") == []
+    assert schema_of(c).field("note").hidden is True
+    assert schema_of(c).field("amount").max == Decimal(9)
+    assert schema_of(c).field("amount").currency == "IRT"
+
+    assert await sync_collections(w.session, w.pricing, w.bot, [draft], "fa") == []
+    assert schema_of(c).field("note").hidden is False
+
+
+async def test_sync_plan_limit_wording(data_world) -> None:
+    w = data_world
+    w.pricing.plan("free").max_data_collections = 0
+    problems = await sync_collections(w.session, w.pricing, w.bot, [BOOKINGS], "fa")
+    assert problems == ["نوبت‌ها: your plan's limit of lists is reached"]
