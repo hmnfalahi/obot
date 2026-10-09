@@ -95,6 +95,9 @@ function UsedBotItem({
           <button className="btn secondary" onClick={() => navigate({ page: 'mine', id: bot.id })}>
             {t('mySettings')}
           </button>
+          <button className="btn secondary" onClick={() => navigate({ page: 'data', botId: bot.id })}>
+            {t('data')}
+          </button>
           <button className="btn secondary" onClick={remove}>
             {t('removeFromList')}
           </button>

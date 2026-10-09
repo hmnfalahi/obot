@@ -121,6 +121,35 @@ const en = {
   'tool.rss': 'RSS feeds',
   'tool.memory': 'Long-term memory',
   'tool.personal_data': 'Personal records (each user)',
+  data: 'Data',
+  dataHint: 'Lists this bot keeps. You see your own records; in shared lists the owner sees everyone’s.',
+  noCollections: 'This bot keeps no lists yet.',
+  'scope.personal': 'personal',
+  'scope.shared': 'shared',
+  'scope.group': 'group',
+  table: 'Table',
+  calendar: 'Calendar',
+  search: 'Search',
+  newest: 'Newest',
+  addRecord: 'Add',
+  editRecord: 'Edit',
+  deleteRecord: 'Delete',
+  deleteRecordConfirm: 'Delete this record?',
+  noRecords: 'Nothing here yet.',
+  loadMore: 'Show more',
+  mineBadge: 'yours',
+  prevWeek: 'Previous week',
+  nextWeek: 'Next week',
+  yes: 'Yes',
+  no: 'No',
+  required: 'required',
+  'dataError.duplicate': '{fields} is already taken; pick another.',
+  'dataError.outside_allowed_hours': 'That time is outside the allowed hours.',
+  'dataError.invalid': 'Some values need fixing.',
+  'dataError.limit_reached': 'The plan’s limit is reached.',
+  'dataError.stale': 'Someone changed this meanwhile; it was reloaded.',
+  'dataError.not_allowed': 'You can’t change this.',
+  'dataError.other': 'Couldn’t save.',
 }
 
 type Key = keyof typeof en
@@ -245,6 +274,35 @@ const fa: Record<Key, string> = {
   'tool.rss': 'خبرخوان RSS',
   'tool.memory': 'حافظه‌ی بلندمدت',
   'tool.personal_data': 'داده‌ی شخصی هر کاربر',
+  data: 'داده‌ها',
+  dataHint: 'فهرست‌هایی که این ربات نگه می‌داره. رکوردهای خودت رو می‌بینی؛ توی فهرست‌های مشترک صاحب ربات همه رو می‌بینه.',
+  noCollections: 'این ربات هنوز فهرستی نداره.',
+  'scope.personal': 'شخصی',
+  'scope.shared': 'مشترک',
+  'scope.group': 'گروهی',
+  table: 'جدول',
+  calendar: 'تقویم',
+  search: 'جستجو',
+  newest: 'جدیدترین',
+  addRecord: 'افزودن',
+  editRecord: 'ویرایش',
+  deleteRecord: 'حذف',
+  deleteRecordConfirm: 'این رکورد حذف بشه؟',
+  noRecords: 'هنوز چیزی ثبت نشده.',
+  loadMore: 'بیشتر',
+  mineBadge: 'مال تو',
+  prevWeek: 'هفته‌ی قبل',
+  nextWeek: 'هفته‌ی بعد',
+  yes: 'بله',
+  no: 'خیر',
+  required: 'اجباری',
+  'dataError.duplicate': '{fields} قبلاً گرفته شده؛ یکی دیگه انتخاب کن.',
+  'dataError.outside_allowed_hours': 'این زمان بیرون از ساعت‌های مجازه.',
+  'dataError.invalid': 'چند تا مقدار باید درست بشن.',
+  'dataError.limit_reached': 'به سقف پلن رسیدی.',
+  'dataError.stale': 'یکی هم‌زمان تغییرش داد؛ دوباره بارگذاری شد.',
+  'dataError.not_allowed': 'نمی‌تونی این رو تغییر بدی.',
+  'dataError.other': 'ذخیره نشد.',
 }
 
 const catalogs: Record<Lang, Record<Key, string>> = { en, fa }
@@ -272,4 +330,24 @@ export function formatDateTime(iso: string, lang: Lang, timeZone: string): strin
 
 export function formatNumber(n: number, lang: Lang): string {
   return new Intl.NumberFormat(lang === 'fa' ? 'fa-IR' : 'en-US').format(n)
+}
+
+/** A label in the user's language, else any language, else `fallback`. */
+export function titleOf(labels: Record<string, string>, lang: Lang, fallback: string): string {
+  return labels[lang] ?? Object.values(labels)[0] ?? fallback
+}
+
+/** A `YYYY-MM-DD` date; fa shows the Persian (Jalali) calendar. */
+export function formatDate(iso: string, lang: Lang): string {
+  return new Intl.DateTimeFormat(lang === 'fa' ? 'fa-IR' : 'en-GB', {
+    dateStyle: 'medium',
+    timeZone: 'UTC',
+  }).format(new Date(`${iso}T00:00:00Z`))
+}
+
+/** A UTC datetime ("...Z") as `YYYY-MM-DDTHH:MM` wall time in `timeZone`, for datetime-local. */
+export function localDateTime(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone, dateStyle: 'short', timeStyle: 'short' })
+    .format(new Date(iso))
+    .replace(' ', 'T')
 }

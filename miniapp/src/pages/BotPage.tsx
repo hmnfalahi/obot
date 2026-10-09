@@ -41,6 +41,9 @@ export function BotPage({ id, me, navigate }: { id: number; me: Me; navigate: (r
       <button className="btn secondary block" onClick={() => navigate({ page: 'mine', id: data.id })}>
         {t('mySettingsForBot')}
       </button>
+      <button className="btn secondary block" onClick={() => navigate({ page: 'data', botId: data.id })}>
+        {t('data')}
+      </button>
       <ProfileForm bot={data} onSaved={bot.set} />
       <Avatar bot={data} />
       <Access bot={data} me={me} onSaved={bot.set} />
