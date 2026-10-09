@@ -4,12 +4,14 @@ from zoneinfo import ZoneInfo
 
 from obot.data.errors import (
     CollectionNotFound,
+    DataError,
     DuplicateRecord,
     FieldError,
     LimitReached,
     OutsideAllowedHours,
     RecordInvalid,
     RecordNotFound,
+    StaleRecord,
 )
 from obot.data.format import (
     describe_collections,
@@ -79,13 +81,15 @@ def collection(key, scope, schema, title) -> Collection:
     )
 
 
-def space(user_id: int) -> DataSpace:
+def space(
+    user_id: int, timezone: str = "Asia/Tehran", owner_timezone: str = "Asia/Tehran"
+) -> DataSpace:
     return DataSpace(
         bot_id=1,
         owner_id=1,
         user_id=user_id,
-        timezone="Asia/Tehran",
-        owner_timezone="Asia/Tehran",
+        timezone=timezone,
+        owner_timezone=owner_timezone,
         plan="free",
         owner_plan="free",
     )
@@ -113,6 +117,32 @@ def test_catalog_describes_fields_rules_and_scope() -> None:
     assert "Sat,Sun,Mon 16:00-20:00" in note
     assert "public fields: date, time" in note
     assert "Friday 2026-10-09" in note and "Asia/Tehran" in note
+    assert "Sat,Sun,Mon 16:00-20:00 (end excluded)" in note
+    assert note.count("(end excluded)") == 1
+    assert note.count("Times are in Asia/Tehran.") == 2
+    assert "In Asia/Tehran it is" not in note  # same zone for user and owner
+    assert "Allowed times (" not in note
+
+
+def test_each_collection_states_its_own_time_zone() -> None:
+    note = describe_collections(
+        [
+            collection("expenses", CollectionScope.PERSONAL, EXPENSES, {"en": "Expenses"}),
+            collection("bookings", CollectionScope.SHARED, BOOKINGS, {"en": "Appointments"}),
+        ],
+        space(user_id=2, timezone="Europe/Berlin", owner_timezone="Asia/Tehran"),
+        NOW,
+    )
+    lines = note.splitlines()
+    expenses = next(line for line in lines if line.startswith("- expenses"))
+    bookings = next(line for line in lines if line.startswith("- bookings"))
+    assert "Times are in Europe/Berlin." in expenses
+    assert "Times are in Asia/Tehran." in bookings
+    # 08:00 UTC: 10:00 in Berlin, 11:30 in Tehran, both on Friday 2026-10-09
+    assert lines[-2].endswith("Today is Friday 2026-10-09, 10:00 in Europe/Berlin.")
+    assert lines[-1] == "In Asia/Tehran it is Friday 2026-10-09, 11:30."
+    assert "local time of the collection" in note
+    assert "in the user's local time" not in note
 
 
 def test_catalog_for_the_owner_says_they_see_everything() -> None:
@@ -122,6 +152,16 @@ def test_catalog_for_the_owner_says_they_see_everything() -> None:
         NOW,
     )
     assert "owns this bot and sees everyone's records" in note
+
+
+def test_hidden_fields_are_left_out_of_records() -> None:
+    record = Record(
+        id=3,
+        data={"amount": "5", "old": "secret"},
+        created_at=datetime(2026, 10, 9, 8, 0, tzinfo=UTC),
+    )
+    assert format_records([record], TEHRAN, hidden=["old"]) == ('#3 (2026-10-09) {"amount": "5"}')
+    assert format_records([record], TEHRAN, ("old", "amount")) == "#3 (2026-10-09) {}"
 
 
 def test_records_and_taken_rows() -> None:
@@ -157,12 +197,15 @@ def test_errors_read_well() -> None:
         RecordInvalid([FieldError("amount", "not a number")]): (
             "invalid values: amount: not a number"
         ),
-        DuplicateRecord(["date", "time"]): "same date, time already exists",
+        DuplicateRecord(["date", "time"]): "the same date+time already exists",
         OutsideAllowedHours(allowed): "allowed times: Sat,Sun,Mon 16:00-20:00",
         LimitReached("records"): "record limit",
         CollectionNotFound("x"): "no collection named 'x'",
         RecordNotFound(5): "no record #5",
+        StaleRecord(): "the record changed meanwhile; look it up again with data_find",
+        DataError("boom."): "ERROR: boom.",
     }
     for error, expected in cases.items():
         text = describe_error(error)
         assert text.startswith("ERROR: ") and expected in text, text
+    assert describe_error(DataError("boom.")) == "ERROR: boom."
