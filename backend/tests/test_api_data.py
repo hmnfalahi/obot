@@ -1,8 +1,9 @@
+from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from obot.data.repository import create_collection
 from obot.data.schema import CollectionSchema
-from obot.db.models import Bot, BotVisibility, CollectionScope
+from obot.db.models import Bot, BotStatus, BotVisibility, CollectionScope, User
 from tests.test_api import ALICE, BOB, auth, make_bot
 
 BOOKINGS = CollectionSchema.model_validate(
@@ -171,3 +172,79 @@ async def test_search_filters_and_paging(api) -> None:
     assert len(filtered["records"]) == 2
     broken = await api.get(records_url(bot_id, cid) + "?filters=nope", headers=auth(ALICE))
     assert broken.status_code == 422
+
+
+async def test_malformed_filters_are_clear_422s(api) -> None:
+    bot_id, cid = await setup(api)
+    for bad in ("5", "true", "nope", '{"a":1}', "[1]"):
+        r = await api.get(records_url(bot_id, cid) + f"?filters={bad}", headers=auth(ALICE))
+        assert r.status_code == 422, bad
+        assert r.json()["detail"]["code"] == "invalid_query"
+        assert {"message", "errors", "fields"} <= set(r.json()["detail"])
+
+
+async def test_offset_paging_and_bound(api) -> None:
+    bot_id, cid = await setup(api)
+    for i in range(3):
+        await api.post(
+            records_url(bot_id, cid),
+            json={"data": {"name": f"N{i}", "date": "2030-01-10", "time": f"1{i}:00"}},
+            headers=auth(ALICE),
+        )
+    url = records_url(bot_id, cid) + "?sort=time&desc=false&limit=2&offset=2"
+    page = (await api.get(url, headers=auth(ALICE))).json()
+    assert [r["data"]["name"] for r in page["records"]] == ["N2"]
+    assert page["has_more"] is False
+    too_far = await api.get(records_url(bot_id, cid) + "?offset=100001", headers=auth(ALICE))
+    assert too_far.status_code == 422
+
+
+async def test_hidden_fields_only_for_editors(api) -> None:
+    bot_id, cid = await setup(api)
+    owner = (await api.get(f"/api/bots/{bot_id}/collections", headers=auth(ALICE))).json()
+    user = (await api.get(f"/api/bots/{bot_id}/collections", headers=auth(BOB))).json()
+    assert "secret" in [f["key"] for f in owner[0]["fields"]]
+    assert "secret" not in [f["key"] for f in user[0]["fields"]]
+
+
+async def test_personal_collection_over_http(api) -> None:
+    bot_id = await make_bot(api, ALICE, 73)
+    async with api.state.sessionmaker() as session:
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        bot.visibility = BotVisibility.PUBLIC
+        await session.commit()
+    # Bob's first call creates his user row; a personal collection is made by him in chat.
+    await api.get(f"/api/bots/{bot_id}/collections", headers=auth(BOB))
+    async with api.state.sessionmaker() as session:
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        bob = await session.scalar(select(User).where(User.tg_user_id == BOB["id"]))
+        c = await create_collection(
+            session,
+            api.state.pricing,
+            bot=bot,
+            key="diary",
+            title={"en": "Diary"},
+            scope=CollectionScope.PERSONAL,
+            schema=BOOKINGS,
+            created_by=bob,
+        )
+        await session.commit()
+        cid = c.id
+    body = {"data": {"name": "Mine", "date": "2030-01-10", "time": "17:00"}}
+    assert (
+        await api.post(records_url(bot_id, cid), json=body, headers=auth(BOB))
+    ).status_code == 201
+    bobs = (await api.get(records_url(bot_id, cid), headers=auth(BOB))).json()
+    assert [r["data"]["name"] for r in bobs["records"]] == ["Mine"]
+    assert (await api.get(records_url(bot_id, cid), headers=auth(ALICE))).status_code == 404
+
+
+async def test_inactive_bot_is_404(api) -> None:
+    bot_id, cid = await setup(api)
+    async with api.state.sessionmaker() as session:
+        bot = await session.get(Bot, bot_id)
+        bot.status = BotStatus.SUSPENDED
+        await session.commit()
+    for who in (ALICE, BOB):
+        r = await api.get(f"/api/bots/{bot_id}/collections", headers=auth(who))
+        assert r.status_code == 404
