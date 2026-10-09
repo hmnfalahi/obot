@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
@@ -339,6 +340,7 @@ def test_export_tokens() -> None:
     assert read_token(TOKEN, token, now + timedelta(seconds=301)) is None
     assert read_token("other", token, now) is None
     assert read_token(TOKEN, token[:-2] + "xx", now) is None
+    assert read_token(TOKEN, "1.2.3.4.é", now) is None
 
 
 async def test_csv_export(api) -> None:
@@ -366,3 +368,105 @@ async def test_csv_export(api) -> None:
     assert '"علی، رضایی"' in lines[1] or "علی، رضایی" in lines[1]
     assert "Old" not in lines[0]
     assert (await api.get(url.replace(url[-6:], "AAAAAA"))).status_code == 404
+
+
+async def test_export_link_errors_are_structured(api) -> None:
+    bad = await api.get("/api/exports/1.2.3.4.%C3%A9")
+    assert bad.status_code == 404 and bad.json()["detail"]["code"] == "export_link_invalid"
+
+
+async def test_csv_neutralizes_formulas_and_uses_collection_timezone(api) -> None:
+    bot_id, cid = await setup(api)
+    await api.post(
+        records_url(bot_id, cid),
+        json={"data": {"name": "=1+1", "date": "2030-01-10", "time": "17:00"}},
+        headers=auth(ALICE),
+    )
+    link = await api.post(f"/api/bots/{bot_id}/collections/{cid}/export", headers=auth(ALICE))
+    text = (await api.get(link.json()["url"])).content.decode("utf-8")
+    assert "'=1+1" in text.splitlines()[1]
+
+
+async def test_csv_datetime_in_collection_timezone(api) -> None:
+    schema = CollectionSchema.model_validate(
+        {"fields": [{"key": "at", "label": {"en": "At"}, "type": "datetime"}]}
+    )
+    async with api.state.sessionmaker() as session:
+        bot_id = await make_bot(api, ALICE, 73)
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        c = await create_collection(
+            session,
+            api.state.pricing,
+            bot=bot,
+            key="events",
+            title={"en": "E"},
+            scope=CollectionScope.SHARED,
+            schema=schema,
+        )
+        await session.commit()
+        cid = c.id
+    made = await api.post(
+        records_url(bot_id, cid),
+        json={"data": {"at": "2030-01-10T12:00:00+00:00"}},
+        headers=auth(ALICE),
+    )
+    assert made.status_code == 201
+    [out] = (await api.get(f"/api/bots/{bot_id}/collections", headers=auth(ALICE))).json()
+    link = await api.post(f"/api/bots/{bot_id}/collections/{cid}/export", headers=auth(ALICE))
+    text = (await api.get(link.json()["url"])).content.decode("utf-8")
+    expected = (
+        datetime(2030, 1, 10, 12, tzinfo=UTC).astimezone(ZoneInfo(out["timezone"]))
+    ).strftime("%Y-%m-%d %H:%M")
+    assert expected in text.splitlines()[1]
+
+
+async def test_creator_edits_own_personal_collection(api) -> None:
+    bot_id, _ = await setup(api)
+    async with api.state.sessionmaker() as session:
+        bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+        bob = await session.scalar(select(User).where(User.tg_user_id == BOB["id"]))
+        if bob is None:
+            await api.get(f"/api/bots/{bot_id}/collections", headers=auth(BOB))
+            bob = await session.scalar(select(User).where(User.tg_user_id == BOB["id"]))
+        c = await create_collection(
+            session,
+            api.state.pricing,
+            bot=bot,
+            key="mine",
+            title={"en": "Mine"},
+            scope=CollectionScope.PERSONAL,
+            schema=CollectionSchema.model_validate(
+                {"fields": [{"key": "n", "label": {"en": "N"}, "type": "text"}]}
+            ),
+            created_by=bob,
+        )
+        await session.commit()
+        cid, version = c.id, c.schema_version
+    fields = [
+        {"key": "n", "label": {"en": "N"}, "type": "text"},
+        {"key": "m", "label": {"en": "M"}, "type": "text"},
+    ]
+    ok = await api.put(
+        schema_url(bot_id, cid),
+        json={"fields": fields, "rules": {}, "version": version, "title": {"en": " Mine2 "}},
+        headers=auth(BOB),
+    )
+    assert ok.status_code == 200 and ok.json()["title"]["en"] == "Mine2"
+    owner_rule = await api.put(
+        f"/api/bots/{bot_id}/collections/{cid}/events",
+        json={"notify": [{"on": "create", "to": "owner"}]},
+        headers=auth(BOB),
+    )
+    assert owner_rule.status_code == 422
+    bad_title = await api.put(
+        schema_url(bot_id, cid),
+        json={"fields": fields, "rules": {}, "version": version + 1, "title": {"de": "x"}},
+        headers=auth(BOB),
+    )
+    assert bad_title.status_code == 422 and bad_title.json()["detail"]["code"] == "invalid_schema"
+    stale = await api.put(
+        schema_url(bot_id, cid),
+        json={"fields": fields, "rules": {}, "version": 1},
+        headers=auth(BOB),
+    )
+    assert stale.json()["detail"]["code"] == "stale"

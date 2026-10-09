@@ -14,11 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.data.describe import label_of
 from obot.data.query import MAX_FIND, find_records
 from obot.data.repository import collection_schema
-from obot.data.schema import FieldType
+from obot.data.schema import NUMERIC_TYPES, FieldType
 from obot.data.space import DataSpace, tz_for
 from obot.db.models import Collection
 
 EXPORT_TTL = 300  # seconds
+_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _sign(secret: str, payload: str) -> str:
@@ -34,6 +35,8 @@ def make_token(secret: str, bot_id: int, collection_id: int, user_id: int, now: 
 
 def read_token(secret: str, token: str, now: datetime) -> tuple[int, int, int] | None:
     """(bot_id, collection_id, user_id) of a valid, unexpired token; None otherwise."""
+    if not token.isascii():
+        return None
     payload, _, sig = token.rpartition(".")
     if not payload or not hmac.compare_digest(sig, _sign(secret, payload)):
         return None
@@ -57,7 +60,10 @@ def _cell(field_type: FieldType, value, tz: ZoneInfo) -> str:
             return value
     if isinstance(value, bool):
         return "1" if value else "0"
-    return str(value)
+    text = str(value)
+    if field_type not in NUMERIC_TYPES and text.startswith(_FORMULA_STARTS):
+        return "'" + text  # a spreadsheet would run this as a formula
+    return text
 
 
 async def build_csv(session: AsyncSession, space: DataSpace, c: Collection, lang: str) -> str:

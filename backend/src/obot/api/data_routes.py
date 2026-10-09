@@ -271,6 +271,20 @@ class SchemaIn(BaseModel):
     version: int
 
 
+def _problem(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status, {"code": code, "message": message, "errors": [], "fields": []})
+
+
+def _clean_title(title: dict[str, str] | None) -> dict[str, str]:
+    cleaned: dict[str, str] = {}
+    for key, value in (title or {}).items():
+        value = value.strip()
+        if key not in ("fa", "en") or not 1 <= len(value) <= 100:
+            raise InvalidSchema("a title is 1 to 100 characters, in fa or en")
+        cleaned[key] = value
+    return cleaned
+
+
 async def _editable(session, bot: Bot, user: User, collection_id: int):
     space = await space_for(session, bot, user)
     try:
@@ -278,20 +292,21 @@ async def _editable(session, bot: Bot, user: User, collection_id: int):
     except DataError as e:
         raise data_error(e) from None
     if not can_edit(c, bot, user):
-        raise HTTPException(404, {"code": "collection_not_found", "message": "not found"})
+        raise _problem(404, "collection_not_found", "not found")
     return space, c
 
 
 @router.put("/bots/{bot_id}/collections/{collection_id}/schema")
 async def put_schema(
-    collection_id: int, body: SchemaIn, bot: UsableBot, user: CurrentUser, session: Session
+    collection_id: CollectionId, body: SchemaIn, bot: UsableBot, user: CurrentUser, session: Session
 ) -> CollectionOut:
     """Replace fields and rules (additive once there are records); rules are replaced as
     sent, which is how a rule is removed on purpose."""
     space, c = await _editable(session, bot, user, collection_id)
     if c.schema_version != body.version:
-        raise HTTPException(409, {"code": "stale", "message": "the list changed meanwhile"})
+        raise _problem(409, "stale", "the list changed meanwhile")
     try:
+        title = _clean_title(body.title)
         try:
             schema = CollectionSchema.model_validate({"fields": body.fields, "rules": body.rules})
         except ValidationError as e:
@@ -299,15 +314,15 @@ async def put_schema(
         await update_collection_schema(session, c, schema)
     except DataError as e:
         raise data_error(e) from None
-    if body.title:
-        c.title = {**c.title, **{k: v.strip() for k, v in body.title.items() if v.strip()}}
+    if title:
+        c.title = {**c.title, **title}
         await session.flush()
     return collection_out(c, bot, user, space)
 
 
 @router.put("/bots/{bot_id}/collections/{collection_id}/events")
 async def put_events(
-    collection_id: int,
+    collection_id: CollectionId,
     body: CollectionEvents,
     bot: UsableBot,
     user: CurrentUser,
@@ -328,7 +343,7 @@ class ExportOut(BaseModel):
 
 @router.post("/bots/{bot_id}/collections/{collection_id}/export")
 async def export_link(
-    collection_id: int, bot: UsableBot, user: CurrentUser, session: Session, state: State
+    collection_id: CollectionId, bot: UsableBot, user: CurrentUser, session: Session, state: State
 ) -> ExportOut:
     _, c = await _space_and_collection(session, bot, user, collection_id)
     token = make_token(state.factory_token, bot.id, c.id, user.id, datetime.now(UTC))
@@ -339,7 +354,7 @@ async def export_link(
 async def export_csv(token: str, session: Session, state: State) -> Response:
     found = read_token(state.factory_token, token, datetime.now(UTC))
     if found is None:
-        raise HTTPException(404, "link expired")
+        raise _problem(404, "export_link_invalid", "link expired")
     bot_id, collection_id, user_id = found
     bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
     user = await session.get(User, user_id)
@@ -350,7 +365,7 @@ async def export_csv(token: str, session: Session, state: State) -> Response:
         or bot.status != BotStatus.ACTIVE
         or not can_use(bot, user.tg_user_id)
     ):
-        raise HTTPException(404, "link expired")
+        raise _problem(404, "export_link_invalid", "link expired")
     space, c = await _space_and_collection(session, bot, user, collection_id)
     text = await build_csv(session, space, c, lang_of(user.language))
     return Response(
