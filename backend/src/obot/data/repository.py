@@ -53,7 +53,7 @@ def _store_schema(c: Collection, schema: CollectionSchema) -> None:
     c.rules = dumped["rules"]
 
 
-def _check_shared_unique(scope: CollectionScope, schema: CollectionSchema) -> None:
+def check_shared_unique(scope: CollectionScope, schema: CollectionSchema) -> None:
     """In a shared collection a duplicate error shows other people's values, so every field
     of a unique rule must be public."""
     if scope != CollectionScope.SHARED:
@@ -84,7 +84,7 @@ async def create_collection(
         raise NotAllowed("only personal collections can be made in chat")
     if not re.fullmatch(KEY_PATTERN, key):
         raise InvalidSchema(f"{key!r} is not a valid collection key")
-    _check_shared_unique(scope, schema)
+    check_shared_unique(scope, schema)
     plan_user = created_by or await session.get(User, bot.owner_id)
     count = await session.scalar(
         select(func.count(Collection.id)).where(
@@ -142,6 +142,16 @@ async def list_collections(session: AsyncSession, space: DataSpace) -> list[Coll
     return templates + [c for c in seen if c.created_by_user_id is not None and c.key not in taken]
 
 
+async def template_collections(session: AsyncSession, bot_id: int) -> list[Collection]:
+    """The bot's own collections (its template), for the factory and the owner's panel."""
+    rows = await session.scalars(
+        select(Collection)
+        .where(Collection.bot_id == bot_id, Collection.created_by_user_id.is_(None))
+        .order_by(Collection.id)
+    )
+    return list(rows)
+
+
 async def get_collection(session: AsyncSession, space: DataSpace, key: str) -> Collection:
     for c in await list_collections(session, space):
         if c.key == key:
@@ -178,7 +188,7 @@ async def update_collection_schema(
     has_records = await session.scalar(
         select(exists().where(Record.collection_id == c.id, Record.deleted_at.is_(None)))
     )
-    _check_shared_unique(c.scope, new)
+    check_shared_unique(c.scope, new)
     check_evolution(collection_schema(c), new, has_records=has_records)
     _store_schema(c, new)
     c.schema_version += 1
