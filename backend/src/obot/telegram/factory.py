@@ -293,8 +293,8 @@ async def on_text(message: Message, session: AsyncSession, runtime: Runtime) -> 
     target_bot = await session.get(BotRecord, row.bot_id) if row.kind == DraftKind.EDIT else None
 
     await message.answer(reply)
-    if output.dropped_collections:
-        names = ", ".join(output.dropped_collections)
+    if result.dropped_collections:
+        names = ", ".join(result.dropped_collections)
         await message.answer(t(lang, "factory.dropped", names=names))
     await message.answer(
         render_card(lang, row, target_bot.username if target_bot else None),
