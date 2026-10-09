@@ -11,7 +11,7 @@ from obot.billing.usage import UsageMeter
 from obot.bots.apis import key_values, load_endpoints
 from obot.bots.users import user_bots
 from obot.core.custom_api import endpoints_note
-from obot.core.tools import ToolServices, build_tools
+from obot.core.tools import PERSONAL_DATA, ToolServices, build_tools
 from obot.data.service import DataService
 from obot.db.models import Bot, User
 from obot.telegram.data_chat import DeleteConfirmer, SharedNotice
@@ -76,7 +76,7 @@ async def toolkit(
             notice_shared=SharedNotice(runtime, bot, payer),
             confirm_delete=DeleteConfirmer(runtime, bot, payer, owner_timezone=owner.timezone),
         )
-        data_note = await service.note(session, now)
+        data_note = await service.note(session, now, can_define=PERSONAL_DATA in (bot.tools or []))
         if data_note:
             services.data = service
     return Toolkit(

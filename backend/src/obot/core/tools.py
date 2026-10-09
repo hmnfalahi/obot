@@ -296,6 +296,8 @@ async def data_summarize(
 DELEGATION_TOOL = "ask_bots"
 SCHEDULE_TOOL = "schedule_task"
 DATA_TOOLS = ("data_find", "data_add", "data_update", "data_delete", "data_summarize")
+# Toolbox switch (not a tool): users may define their own collections in chat (SPEC 8.8).
+PERSONAL_DATA = "personal_data"
 
 TOOLS = {
     "web_search": Tool(web_search),
@@ -326,7 +328,7 @@ def build_tools(
     call_api, `delegation` (the person has other bots) ask_bot, `scheduling` (a private
     chat) schedule_task, and `data` (the bot has collections here) the data_* tools.
     """
-    implicit = (DELEGATION_TOOL, SCHEDULE_TOOL, *DATA_TOOLS)
+    implicit = (DELEGATION_TOOL, SCHEDULE_TOOL, PERSONAL_DATA, *DATA_TOOLS)
     names = [t for t in enabled if t not in implicit]
     names += [API_TOOL] if apis else []
     names += [DELEGATION_TOOL] if delegation else []

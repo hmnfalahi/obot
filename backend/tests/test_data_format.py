@@ -209,3 +209,23 @@ def test_errors_read_well() -> None:
         text = describe_error(error)
         assert text.startswith("ERROR: ") and expected in text, text
     assert describe_error(DataError("boom.")) == "ERROR: boom."
+
+
+def test_empty_catalog_invites_defining_a_collection() -> None:
+    note = describe_collections([], space(user_id=2), NOW, can_define=True)
+    assert "no data collections yet" in note
+    assert "data_define" in note
+    assert "Today is" in note
+    # The hint is there with collections too, and absent without the switch.
+    with_one = describe_collections(
+        [collection("expenses", CollectionScope.PERSONAL, EXPENSES, {"en": "Expenses"})],
+        space(user_id=2),
+        NOW,
+        can_define=True,
+    )
+    assert "data_define" in with_one
+    assert "data_define" not in describe_collections(
+        [collection("expenses", CollectionScope.PERSONAL, EXPENSES, {"en": "Expenses"})],
+        space(user_id=2),
+        NOW,
+    )

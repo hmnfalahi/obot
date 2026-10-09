@@ -124,15 +124,21 @@ class DataService:
             raise CollectionNotFound(key)
         return await space_for(session, bot, user)
 
-    async def note(self, session: AsyncSession, now: datetime | None = None) -> str | None:
-        """The catalog for the bot's instructions; None when it has no collections here or
-        the catalog cannot be read (a failure never breaks the reply)."""
+    async def note(
+        self, session: AsyncSession, now: datetime | None = None, *, can_define: bool = False
+    ) -> str | None:
+        """The catalog for the bot's instructions: None when there is nothing to say (no
+        collections here and no personal_data switch) or the catalog cannot be read. It runs
+        in a savepoint of the caller's session, so a failure never breaks the reply."""
         try:
-            space = await self._space(session)
-            collections = await list_collections(session, space)
-            if not collections:
+            async with session.begin_nested():
+                space = await self._space(session)
+                collections = await list_collections(session, space)
+            if not collections and not can_define:
                 return None
-            return describe_collections(collections, space, now or datetime.now(UTC))
+            return describe_collections(
+                collections, space, now or datetime.now(UTC), can_define=can_define
+            )
         except Exception:
             log.exception("data catalog failed")
             return None
