@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     message_retention_days: int = 30
     # Deleted data records stay restorable this long, then are purged
     deleted_record_retention_days: int = 30
+    # Record notifications and reminders: how often the delivery job runs, how long one run
+    # may keep sending, and how many reminders it claims per batch
+    data_events_interval_seconds: int = 15
+    data_events_budget_seconds: float = 12
+    data_events_claim_batch: int = 100
 
     plans_file: Path = Path("plans.yaml")
     # Designer (LLM) messages a user may send to the factory bot per day

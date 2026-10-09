@@ -203,7 +203,17 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
                 lambda: purge_history(runtime.sessionmaker, settings.message_retention_days),
             )
         ),
-        asyncio.create_task(run_every("data-events", 15, lambda: deliver_data_events(runtime))),
+        asyncio.create_task(
+            run_every(
+                "data-events",
+                settings.data_events_interval_seconds,
+                lambda: deliver_data_events(
+                    runtime,
+                    budget_seconds=settings.data_events_budget_seconds,
+                    claim_batch=settings.data_events_claim_batch,
+                ),
+            )
+        ),
         asyncio.create_task(
             run_every(
                 "data-retention",
