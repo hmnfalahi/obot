@@ -256,3 +256,85 @@ async def test_update_template_and_personal_timezone(data_world) -> None:
 
     texts = [c.args[2] for c in runtime.sender.send_text.await_args_list]
     assert "✏️ Changed in «Visits»:\nAt: 2030-01-10 09:00" in texts
+
+
+async def test_one_run_sends_everything_pending_within_its_budget(data_world) -> None:
+    w = data_world
+    c, runtime = await setup(w)
+    for _ in range(59):
+        w.session.add(
+            RecordEvent(
+                bot_id=w.bot.id,
+                collection_id=c.id,
+                record_id=1,
+                kind="create",
+                recipient_user_id=w.owner.id,
+                data={"name": "Bob"},
+            )
+        )
+    await w.session.commit()
+
+    assert await deliver_data_events(runtime, budget_seconds=0) == 0
+    assert await deliver_data_events(runtime) == 60  # more than the old fixed 50
+
+
+async def test_reminders_are_claimed_in_batches_until_none_are_due(data_world) -> None:
+    w = data_world
+    c, runtime = await setup(w)
+    for name in ("Bob", "Carol"):
+        await add_record(
+            w.session,
+            w.pricing,
+            await w.space(w.alice),
+            c,
+            {"name": name, "date": "2030-01-10", "time": "17:00"},
+        )
+    await w.session.commit()
+    due = datetime(2030, 1, 10, 13, 0, tzinfo=UTC)
+
+    await deliver_data_events(runtime, now=due, claim_batch=1)
+
+    kinds = [k for k, _ in await outcomes(w)]
+    assert kinds.count("remind") == 3
+
+
+async def test_a_bot_that_is_not_running_does_not_use_up_attempts(data_world) -> None:
+    w = data_world
+    _, runtime = await setup(w)
+    runtime.transport.client.return_value = None
+    now = datetime.now(UTC)
+
+    assert await deliver_data_events(runtime, now=now) == 0
+
+    w.session.expunge_all()
+    ev = (await w.session.scalars(select(RecordEvent))).one()
+    assert (ev.attempts, ev.sent_at) == (0, None)
+    assert ev.next_attempt_at == now + timedelta(minutes=1)
+
+
+async def test_an_event_that_breaks_its_transaction_does_not_block_the_rest(
+    data_world, monkeypatch
+) -> None:
+    from sqlalchemy import text
+
+    from obot.telegram import data_events
+
+    w = data_world
+    c, runtime = await setup(w)
+    await extra_event(w, c, w.owner)
+    real = data_events._deliver
+    calls = []
+
+    async def poisoned(session, runtime, ev):
+        calls.append(1)
+        if len(calls) == 1:
+            await session.execute(text("select 1/0"))  # leaves the transaction aborted
+        return await real(session, runtime, ev)
+
+    monkeypatch.setattr(data_events, "_deliver", poisoned)
+
+    assert await deliver_data_events(runtime) == 1
+    w.session.expunge_all()
+    first = await w.session.scalar(select(RecordEvent).order_by(RecordEvent.id))
+    assert (first.attempts, first.sent_at) == (1, None)
+    assert await outcomes(w) == [("create", None), ("create", "sent")]
