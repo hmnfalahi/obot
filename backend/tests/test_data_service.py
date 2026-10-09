@@ -245,3 +245,32 @@ async def test_catalog_failure_gives_no_note(world) -> None:
             raise RuntimeError("down")
 
     assert await service(world, world.alice).note(Broken()) is None
+
+
+async def test_note_with_the_switch_and_no_collections(data_world) -> None:
+    w = data_world
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    service = DataService(sessions, w.pricing, w.bot.id, w.alice.id)
+    async with sessions() as s:
+        assert await service.note(s) is None
+        note = await service.note(s, can_define=True)
+    assert "no data collections yet" in note
+
+
+async def test_a_failing_catalog_leaves_the_callers_session_usable(data_world, monkeypatch) -> None:
+    from sqlalchemy import text
+
+    from obot.data import service as service_module
+
+    w = data_world
+
+    async def broken(session, space):
+        await session.execute(text("select * from no_such_table"))
+
+    monkeypatch.setattr(service_module, "list_collections", broken)
+    service = DataService(None, w.pricing, w.bot.id, w.alice.id)
+
+    assert await service.note(w.session) is None
+    # The failed statement was rolled back to a savepoint: the reply can go on.
+    assert await w.session.scalar(text("select 1")) == 1

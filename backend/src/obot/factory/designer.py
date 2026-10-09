@@ -23,6 +23,7 @@ class ToolName(enum.StrEnum):
     READ_URL = "read_url"
     RSS = "rss"
     MEMORY = "memory"
+    PERSONAL_DATA = "personal_data"
 
 
 TOOL_DESCRIPTIONS = {
@@ -30,6 +31,9 @@ TOOL_DESCRIPTIONS = {
     ToolName.READ_URL: "read the content of a given web page (e.g. a price from a site)",
     ToolName.RSS: "read RSS/Atom feeds",
     ToolName.MEMORY: "remember facts about the chat over time",
+    ToolName.PERSONAL_DATA: (
+        "keep each user's own records they ask for in chat (expenses, weight, habits, lists)"
+    ),
 }
 
 

@@ -120,6 +120,7 @@ const en = {
   'tool.read_url': 'Read web pages',
   'tool.rss': 'RSS feeds',
   'tool.memory': 'Long-term memory',
+  'tool.personal_data': 'Personal records (each user)',
 }
 
 type Key = keyof typeof en
@@ -243,6 +244,7 @@ const fa: Record<Key, string> = {
   'tool.read_url': 'خواندن صفحه‌ی وب',
   'tool.rss': 'خبرخوان RSS',
   'tool.memory': 'حافظه‌ی بلندمدت',
+  'tool.personal_data': 'داده‌ی شخصی هر کاربر',
 }
 
 const catalogs: Record<Lang, Record<Key, string>> = { en, fa }

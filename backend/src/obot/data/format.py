@@ -34,6 +34,12 @@ DATA_RULES = (
     "numbers up yourself. Deleting shows the user a confirm button."
 )
 
+DEFINE_HINT = (
+    "When the user wants you to keep track of something new for them (expenses, weight, "
+    "habits, a list), propose a personal collection with data_define; it exists only after "
+    "they press Save, so don't add records to it before that."
+)
+
 
 def _json(data: dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False)
@@ -95,9 +101,19 @@ def _moment(t: datetime) -> str:
     return f"{t:%A %Y-%m-%d}, {t:%H:%M}"
 
 
-def describe_collections(collections: list[Collection], space: DataSpace, now: datetime) -> str:
-    """The catalog that goes into the bot's instructions."""
-    lines = ["Your data collections (use the data_* tools with these exact keys):"]
+def describe_collections(
+    collections: list[Collection],
+    space: DataSpace,
+    now: datetime,
+    *,
+    can_define: bool = False,
+) -> str:
+    """The catalog that goes into the bot's instructions. `can_define`: the bot may propose
+    personal collections (the personal_data switch)."""
+    if collections:
+        lines = ["Your data collections (use the data_* tools with these exact keys):"]
+    else:
+        lines = ["You have no data collections yet for this user."]
     for c in collections:
         schema = collection_schema(c)
         title = " / ".join(dict.fromkeys(c.title.values())) or c.key
@@ -119,6 +135,8 @@ def describe_collections(collections: list[Collection], space: DataSpace, now: d
     ):
         owner = now.astimezone(ZoneInfo(space.owner_timezone))
         lines.append(f"In {space.owner_timezone} it is {_moment(owner)}.")
+    if can_define:
+        lines.append(DEFINE_HINT)
     return "\n".join(lines)
 
 

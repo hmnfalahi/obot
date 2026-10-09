@@ -1,8 +1,8 @@
 import { initData } from './telegram'
 
 export type Lang = 'fa' | 'en'
-export type ToolName = 'web_search' | 'read_url' | 'rss' | 'memory'
-export const TOOLS: ToolName[] = ['web_search', 'read_url', 'rss', 'memory']
+export type ToolName = 'web_search' | 'read_url' | 'rss' | 'memory' | 'personal_data'
+export const TOOLS: ToolName[] = ['web_search', 'read_url', 'rss', 'memory', 'personal_data']
 
 export interface Quota {
   used: number

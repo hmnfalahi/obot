@@ -361,3 +361,22 @@ async def test_data_filter_keeps_integers_through_the_agent() -> None:
 
     value = seen[0][0]["value"]
     assert value == 12 and type(value) is int
+
+
+def test_personal_data_is_a_toolbox_switch_not_a_tool() -> None:
+    from obot.core.tools import PERSONAL_DATA
+    from obot.factory.designer import ToolName
+
+    assert ToolName.PERSONAL_DATA.value == PERSONAL_DATA == "personal_data"
+    assert [t.name for t in build_tools([PERSONAL_DATA])] == []
+
+
+async def test_switch_gives_data_tools_without_collections(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    w.bot.tools = ["personal_data"]
+    kit = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    assert set(DATA_TOOLS) <= {t.name for t in kit.tools}
+    assert "no data collections yet" in kit.note
+    in_group = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice, data=False)
+    assert not {t.name for t in in_group.tools} & set(DATA_TOOLS)
