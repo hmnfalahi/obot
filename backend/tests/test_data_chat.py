@@ -19,13 +19,14 @@ from obot.core.tools import (
 )
 from obot.data.format import DEFINE_HINT
 from obot.data.query import find_records
-from obot.data.repository import create_collection, get_collection
+from obot.data.repository import MAX_ID, create_collection, get_collection
 from obot.data.schema import CollectionSchema
-from obot.data.service import DataService
+from obot.data.service import DataService, GroupChat
 from obot.db.models import BotVisibility, CollectionScope, Record
 from obot.i18n import t
 from obot.telegram import data_chat
 from obot.telegram.data_chat import DefineProposer, DeleteConfirmer, SharedNotice
+from obot.telegram.group_access import GroupRole
 from obot.telegram.toolkit import toolkit
 
 EXPENSES = CollectionSchema.model_validate(
@@ -589,3 +590,129 @@ async def test_proposal_is_not_stored_when_the_send_fails(data_world) -> None:
     )
     await service.define("weight", "My weight", WEIGHT)
     assert runtime.redis.data == {}
+
+
+SHOPPING = CollectionSchema.model_validate(
+    {"fields": [{"key": "item", "label": {"en": "Item"}, "type": "text", "required": True}]}
+)
+
+
+async def shopping(w):
+    c = await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="shopping",
+        title={"en": "Shopping"},
+        scope=CollectionScope.GROUP,
+        schema=SHOPPING,
+    )
+    await w.session.commit()
+    return c
+
+
+def roles(monkeypatch, by_tg_id: dict[int, GroupRole | None]) -> list[tuple[int, int]]:
+    asked = []
+
+    async def fake_role(client, chat_id, tg_user_id):
+        asked.append((chat_id, tg_user_id))
+        return by_tg_id.get(tg_user_id)
+
+    monkeypatch.setattr(data_chat, "group_role", fake_role)
+    return asked
+
+
+async def remaining_items(runtime, w) -> list[int]:
+    async with runtime.sessionmaker() as s:
+        space = await w.space(w.alice, tg_chat_id=-100)
+        c = await get_collection(s, space, "shopping")
+        return [r.id for r in await find_records(s, space, c)]
+
+
+async def test_group_delete_card_goes_private_and_names_the_group(data_world) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    await shopping(w)
+    group = GroupChat(-100, AsyncMock(return_value=False), title="Family")
+    alice = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        group=group,
+        confirm_delete=DeleteConfirmer(runtime, w.bot, w.alice, group=group),
+    )
+    rid = int((await alice.add("shopping", {"item": "milk"})).split("#")[1].split(":")[0])
+
+    told = await alice.delete("shopping", rid)
+
+    assert "private chat" in told
+    call = runtime.sender.send_text.await_args
+    assert call.args[1] == ALICE.id  # her private chat, not the group
+    assert "Family" in call.args[2] and "milk" in call.args[2]
+    delete = call.kwargs["buttons"].inline_keyboard[0][0].callback_data
+    assert delete.endswith(":-100") and delete.startswith("data:del:")
+
+
+async def test_group_delete_button_rechecks_the_group(data_world, monkeypatch) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    c = await shopping(w)
+    alice = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        group=GroupChat(-100, AsyncMock(return_value=False)),
+    )
+    rid = int((await alice.add("shopping", {"item": "milk"})).split("#")[1].split(":")[0])
+    delete = f"data:del:{c.id}:{rid}:-100"
+
+    # Bob is a plain member: not his item.
+    asked = roles(monkeypatch, {BOB.id: GroupRole(is_admin=False), ALICE.id: None})
+    assert alerted(await press(w, runtime, delete, BOB))
+    # Alice left the group: she can no longer delete from it.
+    assert alerted(await press(w, runtime, delete, ALICE))
+    assert (-100, BOB.id) in asked and (-100, ALICE.id) in asked
+    assert await remaining_items(runtime, w) == [rid]
+
+    # Bob became an admin: Telegram is asked again, never a cache.
+    roles(monkeypatch, {BOB.id: GroupRole(is_admin=True)})
+    assert not alerted(await press(w, runtime, delete, BOB))
+    assert await remaining_items(runtime, w) == []
+
+
+async def test_group_delete_button_for_the_author(data_world, monkeypatch) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    c = await shopping(w)
+    alice = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        group=GroupChat(-100, AsyncMock(return_value=False)),
+    )
+    rid = int((await alice.add("shopping", {"item": "milk"})).split("#")[1].split(":")[0])
+    roles(monkeypatch, {ALICE.id: GroupRole(is_admin=False)})
+
+    # The same record pressed from another group's card is not found there.
+    assert alerted(await press(w, runtime, f"data:del:{c.id}:{rid}:-200", ALICE))
+    assert not alerted(await press(w, runtime, f"data:del:{c.id}:{rid}:-100", ALICE))
+    assert await remaining_items(runtime, w) == []
+
+
+async def test_group_card_callback_fits_telegrams_limit() -> None:
+    assert len(f"data:del:{MAX_ID}:{MAX_ID}:-1009999999999".encode()) <= 64
+
+
+async def test_forged_group_buttons_get_a_plain_answer(data_world, monkeypatch) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    await shopping(w)
+    roles(monkeypatch, {})
+    for forged in ("data:del:1:1:100", "data:del:1:1:-", "data:del:1:1:-x", "data:del:1:1:-1:2"):
+        assert not alerted(await press(w, runtime, forged, ALICE))
