@@ -3,7 +3,8 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from aiogram.methods import AnswerCallbackQuery, EditMessageText
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.methods import AnswerCallbackQuery, EditMessageText, GetChatMember
 from aiogram.types import CallbackQuery, Chat, Message
 from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -777,3 +778,41 @@ async def test_private_toolkit_names_group_lists_without_tools_for_them(data_wor
     kit = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
     assert "Shopping" in kit.note and "group" in kit.note
     assert not {t.name for t in kit.tools} & set(DATA_TOOLS)
+
+
+def alert_texts(client) -> list[str]:
+    answers = [c.args[0] for c in client.await_args_list]
+    return [a.text for a in answers if isinstance(a, AnswerCallbackQuery) and a.show_alert]
+
+
+async def test_group_delete_button_telegram_errors(data_world, monkeypatch) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    c = await shopping(w)
+    alice = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        group=GroupChat(-100, AsyncMock(return_value=False)),
+    )
+    rid = int((await alice.add("shopping", {"item": "milk"})).split("#")[1].split(":")[0])
+    delete = f"data:del:{c.id}:{rid}:-100"
+    method = GetChatMember(chat_id=-100, user_id=ALICE.id)
+
+    def failing(error):
+        async def fake_role(client, chat_id, tg_user_id):
+            raise error
+
+        monkeypatch.setattr(data_chat, "group_role", fake_role)
+
+    failing(TelegramRetryAfter(method, "flood", 5))
+    busy = await press(w, runtime, delete, ALICE)
+    assert alert_texts(busy) == [t("fa", "data.try_later")]
+    assert await remaining_items(runtime, w) == [rid]
+
+    failing(TelegramBadRequest(method, "user not found"))
+    gone = await press(w, runtime, delete, ALICE)
+    assert alert_texts(gone) == [t("fa", "data.not_in_group")]
+    assert await remaining_items(runtime, w) == [rid]

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from aiogram import Bot as Client
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramAPIError
+from redis.asyncio import Redis
 
 ADMIN_STATUSES = (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
 ADMIN_CACHE_SECONDS = 300
@@ -32,7 +33,9 @@ class CachedGroupAdmin:
     """Whether a person is an admin of a group, asked of Telegram at most every few minutes
     per bot, group and person. A Telegram error counts as no and is not remembered."""
 
-    def __init__(self, redis, client: Client, bot_id: int, chat_id: int, tg_user_id: int) -> None:
+    def __init__(
+        self, redis: Redis, client: Client, bot_id: int, chat_id: int, tg_user_id: int
+    ) -> None:
         self._redis, self._client = redis, client
         self._chat_id, self._tg_user_id = chat_id, tg_user_id
         self._key = f"group-admin:{bot_id}:{chat_id}:{tg_user_id}"

@@ -7,7 +7,11 @@ import secrets
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+)
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -179,8 +183,12 @@ async def on_data_button(
             # Always asked fresh: the button may be pressed long after the card was sent.
             try:
                 role = await group_role(query.bot, chat_id, query.from_user.id)
-            except TelegramAPIError:
+            except (TelegramBadRequest, TelegramForbiddenError):
                 role = None
+            except TelegramAPIError:
+                # Flood wait or network trouble: not a statement about membership; fail closed.
+                await query.answer(t(lang, "data.try_later"), show_alert=True)
+                return
             if role is None:
                 await query.answer(t(lang, "data.not_in_group"), show_alert=True)
                 return

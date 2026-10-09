@@ -605,3 +605,23 @@ async def test_private_chats_only_name_the_group_collections(family) -> None:
 async def test_no_group_hint_without_group_collections(world) -> None:
     assert await service(world, world.alice).group_hint(world.session) is None
     assert describe_group_only([]) is None
+
+
+async def test_define_in_a_group_proposes_nothing(data_world) -> None:
+    w = data_world
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock()
+    alice = DataService(
+        sessions,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        propose_define=propose,
+        group=GroupChat(-100, AsyncMock(return_value=False)),
+    )
+
+    told = await alice.define("weight", "Weight", WEIGHT_FIELDS)
+
+    assert told.startswith("ERROR")
+    propose.assert_not_awaited()
