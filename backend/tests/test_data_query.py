@@ -167,3 +167,17 @@ async def test_availability_shows_only_public_fields(data_world) -> None:
     # Filtering on a private field would let Bob probe Alice's name.
     with pytest.raises(InvalidQuery):
         await availability(w.session, bob, c, [Filter("name", FilterOp.EQ, "Alice")])
+
+
+async def test_search_and_offset(data_world) -> None:
+    w = data_world
+    c, alice = await setup_expenses(w)
+
+    found = await find_records(w.session, alice, c, search="SARA")
+    assert [r.data.get("note") for r in found] == ["Lunch with Sara"]
+
+    first = await find_records(w.session, alice, c, sort="amount", descending=False, limit=2)
+    second = await find_records(
+        w.session, alice, c, sort="amount", descending=False, limit=2, offset=2
+    )
+    assert [r.data["amount"] for r in first + second] == ["40.5", "1000", "250000", "9000000"]

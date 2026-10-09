@@ -9,7 +9,16 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import Date, case, cast, func, select
 from sqlalchemy.orm import joinedload
 
-from obot.api.deps import ApiState, CurrentUser, OwnedApi, OwnedBot, OwnedTask, Session, State
+from obot.api.deps import (
+    ApiState,
+    CurrentUser,
+    OwnedApi,
+    OwnedBot,
+    OwnedTask,
+    Session,
+    State,
+    usable_bot,
+)
 from obot.api.schemas import (
     AllowedUserOut,
     ApiIn,
@@ -40,7 +49,7 @@ from obot.api.schemas import (
     WalletKeyOut,
 )
 from obot.billing.usage import count_messages, start_of_day
-from obot.bots.access import can_use, sync_access
+from obot.bots.access import sync_access
 from obot.bots.apis import (
     bot_key_slots,
     delete_key_value,
@@ -61,7 +70,6 @@ from obot.db.models import (
     ApiEndpoint,
     Bot,
     BotChat,
-    BotStatus,
     BotUser,
     BotVisibility,
     DraftState,
@@ -357,10 +365,7 @@ async def remove_key(
 
 
 async def _usable_bot(session: Session, user: User, bot_id: int) -> Bot:
-    bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
-    if bot is None or bot.status != BotStatus.ACTIVE or not can_use(bot, user.tg_user_id):
-        raise HTTPException(404, "bot not found")
-    return bot
+    return await usable_bot(bot_id, user, session)
 
 
 async def _my_settings(session: Session, user: User, bot: Bot) -> MySettingsOut:
