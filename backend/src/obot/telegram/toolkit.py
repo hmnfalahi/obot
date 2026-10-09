@@ -64,16 +64,17 @@ async def toolkit(
     )
     peers = await user_bots(session, payer, exclude=bot) if delegation else []
     if peers:
-        services.delegate = Delegator(runtime, bot, payer)
+        services.delegate = Delegator(runtime, bot, payer, data=data)
     data_note = None
     if data:
+        owner = await session.get(User, bot.owner_id) or payer
         service = DataService(
             runtime.sessionmaker,
             runtime.pricing,
             bot.id,
             payer.id,
             notice_shared=SharedNotice(runtime, bot, payer),
-            confirm_delete=DeleteConfirmer(runtime, bot, payer),
+            confirm_delete=DeleteConfirmer(runtime, bot, payer, owner_timezone=owner.timezone),
         )
         data_note = await service.note(session)
         if data_note:

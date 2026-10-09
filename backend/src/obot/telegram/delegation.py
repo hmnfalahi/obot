@@ -43,8 +43,10 @@ def delegation_note(peers: list[Bot]) -> str | None:
 class Delegator:
     """The `delegate` callable for ToolServices of one reply."""
 
-    def __init__(self, runtime: Runtime, caller: Bot, payer: User) -> None:
+    def __init__(self, runtime: Runtime, caller: Bot, payer: User, *, data: bool = True) -> None:
         self._runtime = runtime
+        # False when the caller answers in a group: the callee gets no collections either.
+        self._data = data
         self._payer_id = payer.id
         self._caller_id = caller.id
         self._caller_name = caller.display_name
@@ -85,6 +87,7 @@ class Delegator:
                 now,
                 payer,
                 delegation=False,
+                data=self._data,
                 note=(
                     f"This question comes from {self._caller_name}, another bot working for "
                     "someone who uses you, not from a person. Answer it directly and "
