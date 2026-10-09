@@ -3,7 +3,10 @@
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from obot.billing.plans import Pricing
+from obot.data.repository import template_collections
 from obot.db.models import Bot, DraftKind, DraftState, FactoryDraft, User
+from obot.factory.collections import from_collection, sync_collections
 from obot.factory.designer import BotDraft, ExistingBot, make_username
 
 ACTIVE_STATES = (DraftState.OPEN, DraftState.AWAITING_CREATION)
@@ -75,7 +78,10 @@ async def take_awaiting_draft(session: AsyncSession, user: User) -> FactoryDraft
     )
 
 
-async def apply_draft(session: AsyncSession, row: FactoryDraft, bot: Bot) -> None:
+async def apply_draft(
+    session: AsyncSession, row: FactoryDraft, bot: Bot, pricing: Pricing
+) -> list[str]:
+    """Apply the draft to the bot; returns the collections that could not be applied."""
     draft = draft_of(row)
     bot.display_name = draft.name
     bot.persona = {
@@ -85,9 +91,11 @@ async def apply_draft(session: AsyncSession, row: FactoryDraft, bot: Bot) -> Non
         "username_hint": draft.username_hint,
     }
     bot.tools = [t.value for t in draft.tools]
+    problems = await sync_collections(session, pricing, bot, draft.collections, draft.language)
     row.bot_id = bot.id
     row.state = DraftState.APPLIED
     await session.flush()
+    return problems
 
 
 async def existing_bot_drafts(session: AsyncSession, user: User) -> list[ExistingBot]:
@@ -102,6 +110,10 @@ async def existing_bot_drafts(session: AsyncSession, user: User) -> list[Existin
             system_prompt=persona.get("system_prompt", ""),
             language=persona.get("language", "en"),
             tools=bot.tools or [],
+            collections=[
+                from_collection(c, persona.get("language", "en"))
+                for c in await template_collections(session, bot.id)
+            ],
         )
         result.append(ExistingBot(username=bot.username, draft=draft))
     return result

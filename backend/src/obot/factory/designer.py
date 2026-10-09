@@ -14,8 +14,11 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.models import Model
+
+from obot.data.errors import InvalidSchema
+from obot.factory.collections import CollectionDraft, to_schema
 
 
 class ToolName(enum.StrEnum):
@@ -54,6 +57,13 @@ class BotDraft(BaseModel):
     )
     language: str = Field(description="Main language the bot speaks, as ISO 639-1 code.")
     tools: list[ToolName] = Field(default_factory=list)
+    collections: list[CollectionDraft] = Field(
+        default_factory=list,
+        description=(
+            "Lists the bot keeps (bookings, orders, expenses...). Empty for bots that only "
+            "talk or fetch information."
+        ),
+    )
 
 
 class DesignerOutput(BaseModel):
@@ -71,6 +81,21 @@ class DesignerOutput(BaseModel):
         description="Only questions whose answers are essential and cannot be guessed.",
     )
     reply: str = Field(description="Short message to the user, in the user's language.")
+
+
+def check_output(output: DesignerOutput) -> None:
+    """Ask the model to fix a draft whose collections obot.data would refuse."""
+    draft = output.draft
+    if draft is None:
+        return
+    keys = [c.key for c in draft.collections]
+    if len(set(keys)) != len(keys):
+        raise ModelRetry("collection keys must be unique within a bot")
+    for c in draft.collections:
+        try:
+            to_schema(c, draft.language)
+        except InvalidSchema as e:
+            raise ModelRetry(f"fix collection {e}") from None
 
 
 @dataclass(frozen=True)
@@ -113,6 +138,19 @@ only run at set times: a bot cannot react to events such as new feed items, page
 changes or people joining; offer a regular check instead (e.g. 'every hour, check the price
 and tell me if it is above X').
 
+When the bot must keep things people send (bookings, orders, registrations, expenses,
+lists), add collections to the draft. 'shared' collections collect from everyone and only
+the owner sees all records (bookings, orders, sign-ups); mark only the fields that show a
+slot is taken as public (e.g. date and time), never names, phones or notes, and make
+unique rules only over public fields (e.g. [['date','time']] so a slot is booked once). Add
+allowed_hours when bookings are only possible at certain times (weekdays 0 = Monday …
+5 = Saturday, 6 = Sunday). 'personal' collections give each user their own records
+(expense book, habit tracker). If users should invent their own lists in chat, add the
+personal_data tool instead. Keys are lowercase latin slugs; titles and labels are in the
+bot's language. Collections cannot notify or remind anyone yet: never promise that. When
+changing an existing bot, keep its collections and their keys unless the user asks
+otherwise; leaving one out never deletes its data.
+
 Write `reply`, `questions` and `description` in the user's language. Keep `reply` to one or
 two sentences; the draft itself is shown to the user separately."""
 
@@ -144,6 +182,12 @@ async def design(
     last_reply: str | None = None,
 ) -> DesignerResult:
     agent = Agent(model, output_type=DesignerOutput, instructions=_instructions())
+
+    @agent.output_validator
+    def _valid(output: DesignerOutput) -> DesignerOutput:
+        check_output(output)
+        return output
+
     prompt = build_prompt(message, current, existing, last_reply)
     result = await agent.run(dated_prompt(prompt, datetime.now(UTC)))
     return DesignerResult(
