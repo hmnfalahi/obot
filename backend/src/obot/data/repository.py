@@ -1,16 +1,42 @@
 """Collections and record writes. Every record access takes a DataSpace (obot.data.space);
 do not query Collection, Record or RecordKey anywhere else."""
 
+import json
 import re
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
-from obot.data.errors import CollectionNotFound, InvalidSchema, LimitReached, NotAllowed
-from obot.data.schema import KEY_PATTERN, CollectionSchema, check_evolution
-from obot.data.space import DataSpace, visible
+from obot.data.errors import (
+    CollectionNotFound,
+    DuplicateRecord,
+    InvalidSchema,
+    LimitReached,
+    NotAllowed,
+    RecordNotFound,
+    StaleRecord,
+)
+from obot.data.schema import (
+    KEY_PATTERN,
+    CollectionSchema,
+    check_allowed_hours,
+    check_evolution,
+    unique_keys,
+    validate_record,
+)
+from obot.data.space import (
+    DataSpace,
+    can_change,
+    payer,
+    record_scope_key,
+    row_filter,
+    tz_for,
+    visible,
+)
 from obot.db.models import Bot, Collection, CollectionScope, Record, RecordKey, User
 
 
@@ -122,3 +148,145 @@ async def delete_collection(session: AsyncSession, c: Collection) -> None:
     """Delete a collection with all its records."""
     await session.execute(delete(Collection).where(Collection.id == c.id))
     session.expunge(c)
+
+
+async def get_record(
+    session: AsyncSession, space: DataSpace, c: Collection, record_id: int
+) -> Record:
+    record = await session.scalar(
+        select(Record).where(Record.id == record_id, *row_filter(space, c))
+    )
+    if record is None:
+        raise RecordNotFound(record_id)
+    return record
+
+
+def _check_size(pricing: Pricing, space: DataSpace, c: Collection, data: dict) -> None:
+    size = len(json.dumps(data, ensure_ascii=False).encode())
+    if size > pricing.plan(payer(space, c)[1]).max_record_bytes:
+        raise LimitReached("record_bytes")
+
+
+async def _check_record_count(
+    session: AsyncSession, pricing: Pricing, space: DataSpace, c: Collection
+) -> None:
+    # Checked before the insert, so concurrent writers may overshoot by a record or two.
+    user_id, plan = payer(space, c)
+    query = (
+        select(func.count(Record.id))
+        .join(Collection, Collection.id == Record.collection_id)
+        .where(Record.bot_id == c.bot_id, Record.deleted_at.is_(None))
+    )
+    if c.scope == CollectionScope.PERSONAL:
+        query = query.where(
+            Collection.scope == CollectionScope.PERSONAL, Record.author_user_id == user_id
+        )
+    else:
+        query = query.where(Collection.scope != CollectionScope.PERSONAL)
+    if await session.scalar(query) >= pricing.plan(plan).max_data_records:
+        raise LimitReached("records")
+
+
+async def _claim_keys(
+    session: AsyncSession, c: Collection, record: Record, schema: CollectionSchema
+) -> None:
+    """Insert the record's unique keys; a key someone else holds is a duplicate. A concurrent
+    holder that has not committed yet makes Postgres wait for it, so exactly one writer wins."""
+    for rule, value_hash in unique_keys(schema, record.data):
+        claimed = await session.scalar(
+            insert(RecordKey)
+            .values(
+                collection_id=c.id,
+                rule=rule,
+                scope_key=record_scope_key(c, record),
+                value_hash=value_hash,
+                record_id=record.id,
+            )
+            .on_conflict_do_nothing()
+            .returning(RecordKey.rule)
+        )
+        if claimed is None:
+            raise DuplicateRecord(rule.split(","))
+
+
+async def add_record(
+    session: AsyncSession, pricing: Pricing, space: DataSpace, c: Collection, data: dict
+) -> Record:
+    schema = collection_schema(c)
+    tz = tz_for(space, c)
+    values = validate_record(schema, data, tz)
+    check_allowed_hours(schema, values, tz)
+    _check_size(pricing, space, c, values)
+    await _check_record_count(session, pricing, space, c)
+    record = Record(
+        collection_id=c.id,
+        bot_id=c.bot_id,
+        author_user_id=space.user_id,
+        tg_chat_id=space.tg_chat_id if c.scope == CollectionScope.GROUP else None,
+        data=values,
+        schema_version=c.schema_version,
+    )
+    async with session.begin_nested():
+        session.add(record)
+        await session.flush()
+        await _claim_keys(session, c, record, schema)
+    return record
+
+
+async def _locked_record(
+    session: AsyncSession, space: DataSpace, c: Collection, record_id: int
+) -> Record:
+    record = await session.scalar(
+        select(Record).where(Record.id == record_id, *row_filter(space, c)).with_for_update()
+    )
+    if record is None:
+        raise RecordNotFound(record_id)
+    if not can_change(space, c, record):
+        raise NotAllowed("only the author can change this record")
+    return record
+
+
+async def update_record(
+    session: AsyncSession,
+    pricing: Pricing,
+    space: DataSpace,
+    c: Collection,
+    record_id: int,
+    changes: dict,
+    *,
+    expected_version: int | None = None,
+) -> Record:
+    """Merge `changes` into the record. The row is locked, so concurrent updates never lose
+    each other's fields; `expected_version` (from the panel) refuses edits of a stale copy."""
+    record = await _locked_record(session, space, c, record_id)
+    if expected_version is not None and record.version != expected_version:
+        raise StaleRecord()
+    schema = collection_schema(c)
+    tz = tz_for(space, c)
+    values = validate_record(schema, changes, tz, current=record.data)
+    check_allowed_hours(schema, values, tz)
+    _check_size(pricing, space, c, values)
+    async with session.begin_nested():
+        await session.execute(delete(RecordKey).where(RecordKey.record_id == record.id))
+        record.data = values
+        record.version += 1
+        record.schema_version = c.schema_version
+        await session.flush()
+        await _claim_keys(session, c, record, schema)
+    return record
+
+
+async def delete_record(
+    session: AsyncSession, space: DataSpace, c: Collection, record_id: int
+) -> None:
+    """Soft delete: the record disappears now and is purged later; its unique keys are freed."""
+    record = await _locked_record(session, space, c, record_id)
+    record.deleted_at = datetime.now(UTC)
+    await session.execute(delete(RecordKey).where(RecordKey.record_id == record.id))
+    await session.flush()
+
+
+async def purge_deleted_records(session: AsyncSession, retention_days: int) -> int:
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    result = await session.execute(delete(Record).where(Record.deleted_at < cutoff))
+    return result.rowcount
