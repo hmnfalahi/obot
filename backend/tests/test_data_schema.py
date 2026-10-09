@@ -198,3 +198,74 @@ def test_evolution_is_additive_once_records_exist() -> None:
     ):
         with pytest.raises(SchemaChangeRejected):
             check_evolution(old, changed(edit), has_records=True)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "12345678901234567890123456789012",  # 32 integer digits: would be silently rounded
+        "1000000000000000000",  # 19 integer digits
+        "1e99999999",  # huge exponent: used to escape as decimal.Overflow
+        "-1e99999999",
+        "1e-99999999",  # tiny exponent: too many fractional digits
+        "0.12345678901",  # 11 fractional digits
+    ],
+)
+def test_oversized_or_overprecise_numbers_are_rejected(raw: str) -> None:
+    with pytest.raises(RecordInvalid) as caught:
+        validate_record(expenses(), {"amount": raw}, TEHRAN)
+    assert [e.field for e in caught.value.errors] == ["amount"]
+
+
+def test_number_formatting_is_plain_and_bounded() -> None:
+    def amount(raw: str) -> str:
+        return validate_record(expenses(), {"amount": raw}, TEHRAN)["amount"]
+
+    assert amount("2.50") == "2.5"
+    assert amount("100") == "100"
+    assert amount("-0") == "0"
+    assert amount("100000000000000000") == "100000000000000000"  # 18 integer digits
+    assert amount("0.1234567890") == "0.123456789"
+
+
+def test_persian_decimal_and_thousands_separators() -> None:
+    assert validate_record(expenses(), {"amount": "۲٫۵"}, TEHRAN)["amount"] == "2.5"
+    assert validate_record(expenses(), {"amount": "۱۲،۰۰۰"}, TEHRAN)["amount"] == "12000"
+    assert validate_record(expenses(), {"amount": "12,000"}, TEHRAN)["amount"] == "12000"
+    assert validate_record(expenses(), {"amount": "۱۲٬۰۰۰"}, TEHRAN)["amount"] == "12000"
+
+
+def test_whitespace_only_text_clears_a_required_field() -> None:
+    with pytest.raises(RecordInvalid) as caught:
+        validate_record(
+            appointments(), {"name": "   ", "date": "2026-10-10", "time": "17:00"}, TEHRAN
+        )
+    assert [(e.field, e.reason) for e in caught.value.errors] == [("name", "required")]
+
+
+def test_text_and_choice_keep_persian_digits() -> None:
+    schema = CollectionSchema.model_validate(
+        {
+            "fields": [
+                {"key": "code", "label": {"fa": "کد"}, "type": "text"},
+                {"key": "size", "label": {"fa": "سایز"}, "type": "choice", "options": ["۱۰", "۲۰"]},
+            ]
+        }
+    )
+    record = validate_record(schema, {"code": " ۱۲۳ ", "size": "۱۰"}, TEHRAN)
+    assert record == {"code": "۱۲۳", "size": "۱۰"}
+
+
+def test_fullwidth_digit_phone_is_rejected() -> None:
+    with pytest.raises(RecordInvalid) as caught:
+        validate_record(
+            appointments(),
+            {
+                "name": "Ali",
+                "date": "2026-10-10",
+                "time": "17:00",
+                "phone": "０９１２１２３４５６７",
+            },
+            TEHRAN,
+        )
+    assert [e.field for e in caught.value.errors] == ["phone"]
