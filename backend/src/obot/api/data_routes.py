@@ -5,18 +5,22 @@ back as {code, message, errors, fields} so the app can explain them in the user'
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Path, Query, Response
+from pydantic import BaseModel, ValidationError
+from sqlalchemy.orm import joinedload
 
+from obot.api.data_export import build_csv, make_token, read_token
 from obot.api.deps import CurrentUser, Session, State, UsableBot
+from obot.bots.access import can_use
 from obot.data.errors import (
     CollectionNotFound,
     DataError,
     DuplicateRecord,
     InvalidQuery,
+    InvalidSchema,
     LimitReached,
     NotAllowed,
     RecordInvalid,
@@ -31,11 +35,16 @@ from obot.data.repository import (
     collection_schema,
     delete_record,
     list_collections,
+    lock_collection,
+    set_collection_events,
+    update_collection_schema,
     update_record,
 )
+from obot.data.schema import CollectionEvents, CollectionSchema
 from obot.data.service import parse_filters
 from obot.data.space import DataSpace, space_for, tz_for
-from obot.db.models import Bot, Collection, Record, User
+from obot.db.models import Bot, BotStatus, Collection, Record, User
+from obot.i18n import lang_of
 
 router = APIRouter(prefix="/api")
 
@@ -253,3 +262,99 @@ async def remove_record(
         await delete_record(session, space, c, record_id)
     except DataError as e:
         raise data_error(e) from None
+
+
+class SchemaIn(BaseModel):
+    fields: list[dict[str, Any]]
+    rules: dict[str, Any] = {}
+    title: dict[str, str] | None = None
+    version: int
+
+
+async def _editable(session, bot: Bot, user: User, collection_id: int):
+    space = await space_for(session, bot, user)
+    try:
+        c = await lock_collection(session, space, collection_id)
+    except DataError as e:
+        raise data_error(e) from None
+    if not can_edit(c, bot, user):
+        raise HTTPException(404, {"code": "collection_not_found", "message": "not found"})
+    return space, c
+
+
+@router.put("/bots/{bot_id}/collections/{collection_id}/schema")
+async def put_schema(
+    collection_id: int, body: SchemaIn, bot: UsableBot, user: CurrentUser, session: Session
+) -> CollectionOut:
+    """Replace fields and rules (additive once there are records); rules are replaced as
+    sent, which is how a rule is removed on purpose."""
+    space, c = await _editable(session, bot, user, collection_id)
+    if c.schema_version != body.version:
+        raise HTTPException(409, {"code": "stale", "message": "the list changed meanwhile"})
+    try:
+        try:
+            schema = CollectionSchema.model_validate({"fields": body.fields, "rules": body.rules})
+        except ValidationError as e:
+            raise InvalidSchema("; ".join(err["msg"] for err in e.errors())) from None
+        await update_collection_schema(session, c, schema)
+    except DataError as e:
+        raise data_error(e) from None
+    if body.title:
+        c.title = {**c.title, **{k: v.strip() for k, v in body.title.items() if v.strip()}}
+        await session.flush()
+    return collection_out(c, bot, user, space)
+
+
+@router.put("/bots/{bot_id}/collections/{collection_id}/events")
+async def put_events(
+    collection_id: int,
+    body: CollectionEvents,
+    bot: UsableBot,
+    user: CurrentUser,
+    session: Session,
+) -> CollectionOut:
+    space, c = await _editable(session, bot, user, collection_id)
+    try:
+        await set_collection_events(session, c, body)
+    except DataError as e:
+        raise data_error(e) from None
+    return collection_out(c, bot, user, space)
+
+
+class ExportOut(BaseModel):
+    url: str
+    file_name: str
+
+
+@router.post("/bots/{bot_id}/collections/{collection_id}/export")
+async def export_link(
+    collection_id: int, bot: UsableBot, user: CurrentUser, session: Session, state: State
+) -> ExportOut:
+    _, c = await _space_and_collection(session, bot, user, collection_id)
+    token = make_token(state.factory_token, bot.id, c.id, user.id, datetime.now(UTC))
+    return ExportOut(url=f"/api/exports/{token}", file_name=f"{c.key}.csv")
+
+
+@router.get("/exports/{token}")
+async def export_csv(token: str, session: Session, state: State) -> Response:
+    found = read_token(state.factory_token, token, datetime.now(UTC))
+    if found is None:
+        raise HTTPException(404, "link expired")
+    bot_id, collection_id, user_id = found
+    bot = await session.get(Bot, bot_id, options=[joinedload(Bot.owner)])
+    user = await session.get(User, user_id)
+    if (
+        bot is None
+        or user is None
+        or user.is_disabled
+        or bot.status != BotStatus.ACTIVE
+        or not can_use(bot, user.tg_user_id)
+    ):
+        raise HTTPException(404, "link expired")
+    space, c = await _space_and_collection(session, bot, user, collection_id)
+    text = await build_csv(session, space, c, lang_of(user.language))
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{c.key}.csv"'},
+    )
