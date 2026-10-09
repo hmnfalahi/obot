@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelRetry
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models import Model
 
 from obot.data.errors import InvalidSchema
@@ -81,21 +81,61 @@ class DesignerOutput(BaseModel):
         description="Only questions whose answers are essential and cannot be guessed.",
     )
     reply: str = Field(description="Short message to the user, in the user's language.")
+    dropped_collections: list[str] = Field(
+        default=[],
+        description="Set by the system, never by you: keys of collections it had to drop.",
+    )
+
+
+def _problems(draft: BotDraft) -> dict[str, str]:
+    """Why each collection (by key) would be refused; the first of a duplicated key is fine."""
+    problems: dict[str, str] = {}
+    seen: set[str] = set()
+    for c in draft.collections:
+        if c.key in seen:
+            problems.setdefault(
+                c.key, f"collection key {c.key!r} is used twice; keys must be unique"
+            )
+            continue
+        seen.add(c.key)
+        try:
+            to_schema(c, draft.language)
+        except InvalidSchema as e:
+            problems[c.key] = f"fix collection {e}"
+    return problems
 
 
 def check_output(output: DesignerOutput) -> None:
     """Ask the model to fix a draft whose collections obot.data would refuse."""
-    draft = output.draft
-    if draft is None:
+    if output.draft is None:
         return
-    keys = [c.key for c in draft.collections]
-    if len(set(keys)) != len(keys):
-        raise ModelRetry("collection keys must be unique within a bot")
+    if problems := _problems(output.draft):
+        raise ModelRetry("; ".join(problems.values()))
+
+
+def drop_invalid_collections(output: DesignerOutput) -> DesignerOutput:
+    """The output without the collections obot.data would refuse; their keys are listed."""
+    draft = output.draft
+    if draft is None or not _problems(draft):
+        return output
+    kept, dropped, seen = [], [], set()
     for c in draft.collections:
         try:
             to_schema(c, draft.language)
-        except InvalidSchema as e:
-            raise ModelRetry(f"fix collection {e}") from None
+            ok = c.key not in seen
+        except InvalidSchema:
+            ok = False
+        seen.add(c.key)
+        if ok:
+            kept.append(c)
+        elif c.key not in dropped:
+            dropped.append(c.key)
+    return output.model_copy(
+        update={
+            "draft": draft.model_copy(update={"collections": kept}),
+            "dropped_collections": dropped,
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -181,10 +221,12 @@ async def design(
     existing: Sequence[ExistingBot] = (),
     last_reply: str | None = None,
 ) -> DesignerResult:
-    agent = Agent(model, output_type=DesignerOutput, instructions=_instructions())
+    agent = Agent(model, output_type=DesignerOutput, instructions=_instructions(), retries=2)
 
     @agent.output_validator
-    def _valid(output: DesignerOutput) -> DesignerOutput:
+    def _valid(ctx: RunContext[None], output: DesignerOutput) -> DesignerOutput:
+        if ctx.retry >= ctx.max_retries:
+            return drop_invalid_collections(output)  # last chance: never lose the turn
         check_output(output)
         return output
 

@@ -7,13 +7,14 @@ draft is left alone and a field missing from it is hidden.
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
-from obot.data.errors import DataError, InvalidSchema, LimitReached
+from obot.data.errors import DataError, InvalidSchema, LimitReached, SchemaChangeRejected
 from obot.data.format import describe_error
 from obot.data.repository import (
     check_shared_unique,
@@ -187,18 +188,32 @@ def merge_schema(old: CollectionSchema, new: CollectionSchema) -> CollectionSche
         raise InvalidSchema(_reasons(e, hidden=sum(f.hidden for f in fields))) from None
 
 
+@dataclass(frozen=True)
+class Problem:
+    """A collection that could not be applied. `reason` is a code the UI words for people:
+    limit | kind_change | breaks_records | invalid | failed."""
+
+    title: str
+    reason: str
+    detail: str | None = None
+
+
+def _detail(e: DataError) -> str:
+    return describe_error(e).removeprefix("ERROR: ").rstrip(".")
+
+
 async def sync_collections(
     session: AsyncSession,
     pricing: Pricing,
     bot: Bot,
     drafts: list[CollectionDraft],
     lang: str,
-) -> list[str]:
+) -> list[Problem]:
     """Create or extend the bot's template collections as drafted; the caller commits.
 
     Each collection is applied in its own savepoint, so one problem (a change that would
     break stored records, the plan's limit) never blocks the others. Returns the problems
-    as "title: reason".
+    as Problem values.
     """
     existing = {c.key: c for c in await template_collections(session, bot.id)}
     problems = []
@@ -219,9 +234,8 @@ async def sync_collections(
                     )
                     continue
                 if c.scope.value != d.scope:
-                    raise InvalidSchema(
-                        "a list can't switch between personal and shared; make a new one"
-                    )
+                    problems.append(Problem(d.title, "kind_change"))
+                    continue
                 old = collection_schema(c)
                 merged = merge_schema(old, schema)
                 if merged != old:
@@ -231,14 +245,14 @@ async def sync_collections(
                     await session.flush()
         except LimitReached as e:
             if e.limit == "collections":
-                problems.append(f"{d.title}: your plan's limit of lists is reached")
+                problems.append(Problem(d.title, "limit"))
             else:
-                reason = describe_error(e).removeprefix("ERROR: ").rstrip(".")
-                problems.append(f"{d.title}: {reason}")
+                problems.append(Problem(d.title, "invalid", _detail(e)))
+        except SchemaChangeRejected as e:
+            problems.append(Problem(d.title, "breaks_records", _detail(e)))
         except DataError as e:
-            reason = describe_error(e).removeprefix("ERROR: ").rstrip(".")
-            problems.append(f"{d.title}: {reason}")
+            problems.append(Problem(d.title, "invalid", _detail(e)))
         except Exception:
             log.exception("syncing collection %r of bot %s failed", d.key, bot.id)
-            problems.append(f"{d.title}: could not be saved, try again later")
+            problems.append(Problem(d.title, "failed"))
     return problems

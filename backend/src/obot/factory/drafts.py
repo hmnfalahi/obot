@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.billing.plans import Pricing
 from obot.data.repository import template_collections
 from obot.db.models import Bot, DraftKind, DraftState, FactoryDraft, User
-from obot.factory.collections import from_collection, sync_collections
+from obot.factory.collections import Problem, from_collection, sync_collections
 from obot.factory.designer import BotDraft, ExistingBot, make_username
 
 ACTIVE_STATES = (DraftState.OPEN, DraftState.AWAITING_CREATION)
@@ -80,7 +80,7 @@ async def take_awaiting_draft(session: AsyncSession, user: User) -> FactoryDraft
 
 async def apply_draft(
     session: AsyncSession, row: FactoryDraft, bot: Bot, pricing: Pricing
-) -> list[str]:
+) -> list[Problem]:
     """Apply the draft to the bot; returns the collections that could not be applied."""
     draft = draft_of(row)
     bot.display_name = draft.name

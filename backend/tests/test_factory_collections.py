@@ -8,6 +8,7 @@ from obot.data.repository import collection_schema as schema_of
 from obot.db.models import CollectionScope
 from obot.factory.collections import (
     CollectionDraft,
+    Problem,
     from_collection,
     sync_collections,
     to_schema,
@@ -106,13 +107,13 @@ async def test_sync_reports_problems_and_applies_the_rest(data_world) -> None:
     )
 
     problems = await sync_collections(w.session, w.pricing, w.bot, [retyped, personal_now], "fa")
-    assert len(problems) == 1 and problems[0].startswith("نوبت‌ها: ")
-    assert "type" in problems[0]
+    assert len(problems) == 1 and problems[0].title == "نوبت‌ها"
+    assert problems[0].reason == "breaks_records" and "type" in problems[0].detail
     keys = sorted(c.key for c in await template_collections(w.session, w.bot.id))
     assert keys == ["appointments", "notes"]  # the valid one was still created
 
     problems = await sync_collections(w.session, w.pricing, w.bot, [rescoped], "fa")
-    assert len(problems) == 1 and "personal" in problems[0]
+    assert problems == [Problem(BOOKINGS.title, "kind_change")]
 
 
 async def test_sync_respects_the_owners_plan(data_world) -> None:
@@ -122,7 +123,7 @@ async def test_sync_respects_the_owners_plan(data_world) -> None:
 
     problems = await sync_collections(w.session, w.pricing, w.bot, [BOOKINGS, second], "fa")
 
-    assert len(problems) == 1 and problems[0].startswith("لیست انتظار: ")
+    assert problems == [Problem("لیست انتظار", "limit")]
 
 
 async def test_sync_too_many_fields_is_one_problem(data_world) -> None:
@@ -140,9 +141,8 @@ async def test_sync_too_many_fields_is_one_problem(data_world) -> None:
     problems = await sync_collections(w.session, w.pricing, w.bot, [big, other], "fa")
 
     assert len(problems) == 1
-    assert (
-        problems[0].startswith("نوبت‌ها: ") and "too many fields, including 2 hidden" in problems[0]
-    )
+    assert problems[0].title == "نوبت‌ها" and problems[0].reason == "invalid"
+    assert "too many fields, including 2 hidden" in problems[0].detail
     keys = sorted(c.key for c in await template_collections(w.session, w.bot.id))
     assert keys == ["appointments", "waitlist"]
 
@@ -186,4 +186,4 @@ async def test_sync_plan_limit_wording(data_world) -> None:
     w = data_world
     w.pricing.plan("free").max_data_collections = 0
     problems = await sync_collections(w.session, w.pricing, w.bot, [BOOKINGS], "fa")
-    assert problems == ["نوبت‌ها: your plan's limit of lists is reached"]
+    assert problems == [Problem("نوبت‌ها", "limit")]
