@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from obot.data.errors import CollectionNotFound
 from obot.db.models import Bot, Collection, CollectionScope, Record, User
 
 
@@ -59,6 +60,12 @@ def visible(space: DataSpace, c: Collection) -> bool:
     if c.created_by_user_id is not None and c.created_by_user_id != space.user_id:
         return False
     return (c.scope == CollectionScope.GROUP) == (space.tg_chat_id is not None)
+
+
+def require_visible(space: DataSpace, c: Collection) -> None:
+    """Raise CollectionNotFound unless `c` is visible to the space, whoever passed it in."""
+    if not visible(space, c):
+        raise CollectionNotFound(c.key)
 
 
 def row_filter(space: DataSpace, c: Collection) -> list[ColumnElement[bool]]:

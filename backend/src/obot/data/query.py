@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.data.errors import InvalidQuery
 from obot.data.repository import collection_schema
 from obot.data.schema import NUMERIC_TYPES, CollectionSchema, FieldDef, FieldType, normalize_value
-from obot.data.space import DataSpace, row_filter, tz_for
+from obot.data.space import DataSpace, require_visible, row_filter, tz_for
 from obot.db.models import Collection, CollectionScope, Record
 
 MAX_FIND = 100
@@ -131,6 +131,7 @@ async def find_records(
     limit: int = 20,
 ) -> list[Record]:
     """Records of `c` the space may read, newest first unless sorted by a field."""
+    require_visible(space, c)
     schema = collection_schema(c)
     tz = tz_for(space, c)
     query = select(Record).where(
@@ -157,6 +158,7 @@ async def availability(
 ) -> list[dict[str, Any]]:
     """The public fields of matching records of a shared collection, whoever wrote them:
     enough to tell that a slot is taken, never by whom (SPEC 8.8)."""
+    require_visible(space, c)
     if c.scope != CollectionScope.SHARED:
         raise InvalidQuery("availability works on shared collections only")
     schema = collection_schema(c)
@@ -216,6 +218,7 @@ async def summarize(
 ) -> list[SummaryRow]:
     """count/sum/avg/min/max over the records the space may read, optionally grouped by a
     field or by day/week/month of a date field (the first one unless `period_field`)."""
+    require_visible(space, c)
     schema = collection_schema(c)
     tz = tz_for(space, c)
     if metric == Metric.COUNT:
