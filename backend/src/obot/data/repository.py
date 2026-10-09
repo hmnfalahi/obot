@@ -159,6 +159,17 @@ async def collection_by_id(
     return c
 
 
+async def lock_collection(
+    session: AsyncSession, space: DataSpace, collection_id: int
+) -> Collection:
+    """Like collection_by_id, but reads the current row and locks it until the transaction
+    ends, so concurrent schema changes are serialized."""
+    c = await session.get(Collection, collection_id, with_for_update=True, populate_existing=True)
+    if c is None or not visible(space, c):
+        raise CollectionNotFound(str(collection_id))
+    return c
+
+
 async def update_collection_schema(
     session: AsyncSession, c: Collection, new: CollectionSchema
 ) -> None:

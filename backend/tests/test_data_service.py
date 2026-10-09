@@ -398,3 +398,108 @@ async def test_nothing_new_to_add_is_refused(data_world) -> None:
         await s.commit()
 
     assert "nothing new" in await alice.define("weight", "W", WEIGHT_FIELDS)
+
+
+async def _weight(w):
+    await w.session.commit()
+    sessions = async_sessionmaker(w.session.bind, expire_on_commit=False)
+    propose = AsyncMock(return_value="ok")
+    alice = DataService(sessions, w.pricing, w.bot.id, w.alice.id, propose_define=propose)
+    await alice.define("weight", "W", WEIGHT_FIELDS)
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, propose.await_args.args[0])
+        await s.commit()
+    return sessions, propose, alice
+
+
+@pytest.mark.parametrize("with_records", [True, False])
+async def test_stale_proposal_is_refused(data_world, with_records) -> None:
+    from obot.data.errors import DataError
+
+    w = data_world
+    sessions, propose, alice = await _weight(w)
+    if with_records:
+        await alice.add("weight", {"day": "2026-10-09", "kg": 72})
+    await alice.define(
+        "weight", "W", [*WEIGHT_FIELDS, {"key": "note", "label": "N", "type": "text"}]
+    )
+    p1 = propose.await_args.args[0]
+    await alice.define(
+        "weight", "W", [*WEIGHT_FIELDS, {"key": "mood", "label": "M", "type": "text"}]
+    )
+    p2 = propose.await_args.args[0]
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, p2)
+        await s.commit()
+    async with sessions() as s:
+        with pytest.raises(DataError, match="changed since"):
+            await apply_definition(s, w.pricing, p1)
+        await s.rollback()
+        c = await get_collection(s, await _space(s, w), "weight")
+        assert "mood" in [f.key for f in collection_schema(c).fields]
+
+
+async def _space(s, w):
+    from obot.data.space import space_for
+    from obot.db.models import Bot, User
+
+    return await space_for(s, await s.get(Bot, w.bot.id), await s.get(User, w.alice.id))
+
+
+async def test_define_rejects_bad_options_types_and_hidden_fields(data_world) -> None:
+    w = data_world
+    sessions, propose, alice = await _weight(w)
+    await alice.define(
+        "weight",
+        "W",
+        [*WEIGHT_FIELDS, {"key": "tag", "label": "T", "type": "choice", "options": ["a"]}],
+    )
+    async with sessions() as s:
+        await apply_definition(s, w.pricing, propose.await_args.args[0])
+        await s.commit()
+    propose.reset_mock()
+    tag = {"key": "tag", "label": "T", "type": "choice"}
+    out = [
+        await alice.define("weight", "W", [*WEIGHT_FIELDS, {**tag, "options": "gym"}]),
+        await alice.define("weight", "W", [*WEIGHT_FIELDS, {**tag, "type": "text"}]),
+    ]
+    assert all(t.startswith("ERROR: ") for t in out), out
+    assert "already exists as choice" in out[1]
+    # Hide the field, then try to bring it back or add options to it.
+    async with sessions() as s:
+        c = await get_collection(s, await _space(s, w), "weight")
+        data = collection_schema(c).model_dump(mode="json")
+        for f in data["fields"]:
+            if f["key"] == "tag":
+                f["hidden"] = True
+        await update_collection_schema(s, c, CollectionSchema.model_validate(data))
+        await s.commit()
+    for spec in (tag, {**tag, "options": ["b"]}):
+        text = await alice.define("weight", "W", [*WEIGHT_FIELDS, spec])
+        assert "can't be added back" in text, text
+    propose.assert_not_awaited()
+
+
+async def test_template_with_same_key_hides_the_proposal_target(data_world) -> None:
+    from obot.data.errors import DataError
+
+    w = data_world
+    sessions, propose, alice = await _weight(w)
+    await alice.define(
+        "weight", "W", [*WEIGHT_FIELDS, {"key": "note", "label": "N", "type": "text"}]
+    )
+    p = propose.await_args.args[0]
+    async with sessions() as s:
+        await create_collection(
+            s,
+            w.pricing,
+            bot=w.bot,
+            key="weight",
+            title={"en": "T"},
+            scope=CollectionScope.PERSONAL,
+            schema=EXPENSES,
+        )
+        await s.commit()
+    async with sessions() as s:
+        with pytest.raises(DataError, match="no longer available"):
+            await apply_definition(s, w.pricing, p)
