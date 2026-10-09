@@ -4,7 +4,6 @@ what people save in its shared collections, and a confirm button for deletes."""
 import json
 import logging
 import secrets
-from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -14,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.bots.access import can_use
 from obot.bots.users import started_user
-from obot.data.describe import field_text, label_of
+from obot.data.describe import field_text, label_of, record_lines
 from obot.data.errors import DataError, RecordNotFound
 from obot.data.format import describe_error
 from obot.data.repository import (
@@ -24,7 +23,7 @@ from obot.data.repository import (
     delete_record,
     was_deleted,
 )
-from obot.data.schema import FieldDef, FieldType
+from obot.data.schema import FieldDef
 from obot.data.service import Definition, apply_definition
 from obot.data.space import space_for
 from obot.db.models import Bot as BotRecord
@@ -41,29 +40,8 @@ def _title(c: Collection, lang: str) -> str:
     return c.title.get(lang) or next(iter(c.title.values()), c.key)
 
 
-def _shown(f: FieldDef, value: object, tz: ZoneInfo) -> object:
-    if f.type == FieldType.DATETIME and isinstance(value, str):
-        try:
-            moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return value
-        return moment.astimezone(tz).strftime("%Y-%m-%d %H:%M")
-    return value
-
-
 def record_text(c: Collection, record: Record, lang: str, tz: ZoneInfo) -> str:
-    """The record as 'Label: value' lines in the person's language, without hidden fields;
-    datetimes in `tz` (the collection's time zone)."""
-    fields = {f.key: f for f in collection_schema(c).fields}
-    lines = []
-    for key, value in record.data.items():
-        f = fields.get(key)
-        if f is None:
-            lines.append(f"{key}: {value}")
-        elif not f.hidden:
-            label = f.label.get(lang) or f.label.get("en") or key
-            lines.append(f"{label}: {_shown(f, value, tz)}")
-    return "\n".join(lines)
+    return record_lines(collection_schema(c), record.data, lang, tz)
 
 
 class SharedNotice:

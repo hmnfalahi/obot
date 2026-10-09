@@ -3,9 +3,10 @@
 The model reads obot.data.format instead; this module is for owners and users, in fa/en.
 """
 
-from datetime import time
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
-from obot.data.schema import AllowedHours, CollectionSchema, FieldDef
+from obot.data.schema import AllowedHours, CollectionSchema, FieldDef, FieldType
 from obot.db.models import CollectionScope
 from obot.i18n import t
 
@@ -91,4 +92,29 @@ def collection_text(title: str, scope: CollectionScope, schema: CollectionSchema
     visible = [field_text(f, lang) for f in schema.fields if not f.hidden]
     lines.append("   " + _separator(lang).join(visible))
     lines += [f"   {rule}" for rule in rules_text(schema, lang)]
+    return "\n".join(lines)
+
+
+def _shown(f: FieldDef, value: object, tz: ZoneInfo) -> object:
+    if f.type == FieldType.DATETIME and isinstance(value, str):
+        try:
+            moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+        return moment.astimezone(tz).strftime("%Y-%m-%d %H:%M")
+    return value
+
+
+def record_lines(schema: CollectionSchema, data: dict, lang: str, tz: ZoneInfo) -> str:
+    """The record as 'Label: value' lines in the person's language, without hidden fields;
+    datetimes in `tz` (the collection's time zone)."""
+    fields = schema.field_map()
+    lines = []
+    for key, value in data.items():
+        f = fields.get(key)
+        if f is None:
+            lines.append(f"{key}: {value}")
+        elif not f.hidden:
+            label = f.label.get(lang) or f.label.get("en") or key
+            lines.append(f"{label}: {_shown(f, value, tz)}")
     return "\n".join(lines)

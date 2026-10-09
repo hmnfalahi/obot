@@ -37,6 +37,7 @@ from obot.telegram import (
     payments,
     scheduling,
 )
+from obot.telegram.data_events import deliver_data_events
 from obot.telegram.middleware import ManagedBotMiddleware, SessionMiddleware
 from obot.telegram.polling import PollingManager
 from obot.telegram.runtime import Runtime
@@ -202,6 +203,7 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
                 lambda: purge_history(runtime.sessionmaker, settings.message_retention_days),
             )
         ),
+        asyncio.create_task(run_every("data-events", 15, lambda: deliver_data_events(runtime))),
         asyncio.create_task(
             run_every(
                 "data-retention",
