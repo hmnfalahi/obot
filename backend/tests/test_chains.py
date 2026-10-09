@@ -169,6 +169,7 @@ def runtime_for(session, cipher, model: Scripted) -> SimpleNamespace:
         cipher=cipher,
         http=httpx.AsyncClient(),
         tavily_api_key=None,
+        sessionmaker=None,  # the data tools only use it when they act, not to list collections
     )
 
 

@@ -330,7 +330,15 @@ async def _respond(
             runtime, bot_record, inbound.client, inbound.chat_id, lang_of(inbound.sender_language)
         )
         kit = await toolkit(
-            session, runtime, bot_record, now, payer, schedule=schedule, ask_for_keys=ask_for_keys
+            session,
+            runtime,
+            bot_record,
+            now,
+            payer,
+            schedule=schedule,
+            ask_for_keys=ask_for_keys,
+            # Group data comes later (SPEC 8.8, P5-7); personal data never reaches a group.
+            data=not group,
         )
         reply = await generate_reply(
             chosen.model,
