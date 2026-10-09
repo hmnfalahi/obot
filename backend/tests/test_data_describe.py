@@ -107,3 +107,15 @@ def test_a_reminder_at_the_time_says_so() -> None:
     )
     assert events_text(events, BOOKINGS, "en") == ["I remind them at Date"]
     assert events_text(events, BOOKINGS, "fa") == ["همان موقع تاریخ یادآوری می‌کنم"]
+
+
+def test_group_scope_is_described_in_both_languages() -> None:
+    from obot.data.describe import collection_text
+    from obot.data.schema import CollectionSchema
+    from obot.db.models import CollectionScope
+
+    schema = CollectionSchema.model_validate(
+        {"fields": [{"key": "item", "label": {"en": "Item", "fa": "قلم"}, "type": "text"}]}
+    )
+    assert "group" in collection_text("Shopping", CollectionScope.GROUP, schema, "en")
+    assert "گروه" in collection_text("خرید", CollectionScope.GROUP, schema, "fa")
