@@ -32,6 +32,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "factory.link_fallback": "Button not working (e.g. on iOS)? Use this link:",
         "factory.ready": "✅ @{username} is ready.",
         "factory.open_hint": "Open it and press Start so it can message you.",
+        "factory.owner_start": (
+            "To get a message about each new entry, open @{username} once and press Start."
+        ),
         "factory.saved": "✅ Changes to @{username} saved.",
         "card.new": "📝 New bot draft",
         "card.edit": "📝 Changes to @{username}",
@@ -157,6 +160,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "data.events.notify_owner": "I tell you about each new one",
         "data.events.notify_author": "If you change or remove one, I tell the person who added it",
         "data.events.remind": "I remind them {amount} before {field}",
+        "data.events.remind_at": "I remind them at {field}",
         "duration.day": "{n} day",
         "duration.days": "{n} days",
         "duration.hour": "{n} hour",
@@ -267,6 +271,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "factory.link_fallback": "دکمه کار نمی‌کنه (مثلاً روی iOS)؟ از این لینک استفاده کن:",
         "factory.ready": "✅ @{username} آماده‌ست.",
         "factory.open_hint": "بازش کن و Start رو بزن تا بتونه بهت پیام بده.",
+        "factory.owner_start": (
+            "برای اینکه خبر موردهای تازه بهت برسه، یه بار @{username} رو باز کن و Start رو بزن."
+        ),
         "factory.saved": "✅ تغییرات @{username} ذخیره شد.",
         "card.new": "📝 پیش‌نویس ربات جدید",
         "card.edit": "📝 تغییرات @{username}",
@@ -386,6 +393,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "data.events.notify_owner": "با هر مورد تازه به تو خبر می‌دهم",
         "data.events.notify_author": "اگر چیزی را تغییر دهی یا حذف کنی، به ثبت‌کننده خبر می‌دهم",
         "data.events.remind": "{amount} قبل از {field} یادآوری می‌کنم",
+        "data.events.remind_at": "همان موقع {field} یادآوری می‌کنم",
         "duration.days": "{n} روز",
         "duration.hours": "{n} ساعت",
         "duration.minutes": "{n} دقیقه",

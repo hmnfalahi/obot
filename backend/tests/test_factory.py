@@ -423,3 +423,50 @@ def test_an_unbuildable_reminder_is_an_invalid_schema() -> None:
     )
     with pytest.raises(InvalidSchema):
         to_events(wild, CollectionEvents())
+
+
+async def save_draft(w, cipher, monkeypatch, draft) -> list[SendMessage]:
+    row = await start_draft(w.session, w.owner, draft, last_reply=None, target=w.bot)
+    monkeypatch.setattr(factory, "sync_profile", AsyncMock())
+    client = AsyncMock()
+    owner = User(id=1001, is_bot=False, first_name="Owner", language_code="fa")
+    message = Message(
+        message_id=3, date=datetime.now(UTC), chat=Chat(id=1001, type="private"), text="card"
+    ).as_(client)
+    query = CallbackQuery(
+        id="q", from_user=owner, chat_instance="c", data=f"draft:save:{row.id}", message=message
+    ).as_(client)
+    await factory.on_save(query, w.session, SimpleNamespace(pricing=w.pricing, cipher=cipher))
+    return [m for (m,), _ in client.await_args_list if isinstance(m, SendMessage)]
+
+
+NOTIFYING = DENTIST.model_copy(
+    update={"collections": [BOOKINGS.model_copy(update={"notify_owner": True})]}
+)
+
+
+async def test_saving_new_record_messages_asks_an_owner_who_never_started_the_bot(
+    data_world, cipher, monkeypatch
+) -> None:
+    w = data_world
+
+    sent = await save_draft(w, cipher, monkeypatch, NOTIFYING)
+
+    assert sent[-1].text == (
+        "برای اینکه خبر موردهای تازه بهت برسه، یه بار @datab رو باز کن و Start رو بزن."
+    )
+    [[button]] = sent[-1].reply_markup.inline_keyboard
+    assert button.url == "https://t.me/datab?start=init"
+
+
+async def test_an_owner_who_started_the_bot_is_not_asked_again(
+    data_world, cipher, monkeypatch
+) -> None:
+    from obot.bots.users import join_bot
+
+    w = data_world
+    await join_bot(w.session, w.bot, 1001, "fa")
+
+    sent = await save_draft(w, cipher, monkeypatch, NOTIFYING)
+
+    assert sent[-1].text == "✅ تغییرات @datab ذخیره شد."

@@ -114,6 +114,9 @@ def events_text(events: CollectionEvents, schema: CollectionSchema, lang: str) -
             if r.date_field in fields
             else r.date_field
         )
+        if r.before_minutes == 0:
+            lines.append(t(lang, "data.events.remind_at", field=field))
+            continue
         lines.append(
             t(
                 lang,
