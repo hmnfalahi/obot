@@ -67,7 +67,7 @@ class DataTools(Protocol):
 class DataFilter(BaseModel):
     field: str
     op: Literal["eq", "ne", "lt", "lte", "gt", "gte", "contains", "in"]
-    value: Any = None
+    value: str | float | bool | list[str | float] | None = None
 
 
 @dataclass

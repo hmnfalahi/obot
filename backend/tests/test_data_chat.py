@@ -7,12 +7,13 @@ from aiogram.types import CallbackQuery, Chat, Message
 from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from obot.bots.users import join_bot
 from obot.core.tools import DATA_TOOLS, ToolServices, build_tools, data_add
 from obot.data.query import find_records
 from obot.data.repository import create_collection, get_collection
 from obot.data.schema import CollectionSchema
 from obot.data.service import DataService
-from obot.db.models import BotVisibility, CollectionScope
+from obot.db.models import BotVisibility, CollectionScope, Record
 from obot.telegram import data_chat
 from obot.telegram.data_chat import DeleteConfirmer, SharedNotice
 from obot.telegram.toolkit import toolkit
@@ -140,3 +141,153 @@ async def test_delete_card_deletes_only_for_its_author(data_world) -> None:
     assert await remaining() == [record_id]
     await press(w, runtime, delete, ALICE)
     assert await remaining() == []
+
+
+async def shared_notes(w):
+    c = await create_collection(
+        w.session,
+        w.pricing,
+        bot=w.bot,
+        key="notes",
+        title={"en": "Notes"},
+        scope=CollectionScope.SHARED,
+        schema=CollectionSchema.model_validate(
+            {
+                "fields": [
+                    {"key": "text", "label": {"en": "Text"}, "type": "text", "required": True},
+                    {"key": "at", "label": {"en": "At"}, "type": "datetime"},
+                    {"key": "secret", "label": {"en": "Secret"}, "type": "text", "hidden": True},
+                ]
+            }
+        ),
+    )
+    await w.session.commit()
+    return c
+
+
+async def remaining_notes(w, runtime, who) -> list[int]:
+    async with runtime.sessionmaker() as s:
+        space = await w.space(w.owner)
+        c = await get_collection(s, space, "notes")
+        return [r.id for r in await find_records(s, space, c)]
+
+
+async def test_shared_delete_is_for_the_author_or_the_owner(data_world) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    await shared_notes(w)
+    await join_bot(w.session, w.bot, 1001, "en")  # the owner uses the bot too
+    await w.session.commit()
+    alice = DataService(runtime.sessionmaker, w.pricing, w.bot.id, w.alice.id)
+    saved = await alice.add("notes", {"text": "hi", "at": "2026-01-01T12:00"})
+    record_id = int(saved.split("#")[1].split(":")[0])
+    async with runtime.sessionmaker() as s:  # hidden fields are never set by the model
+        record = await s.get(Record, record_id)
+        record.data = {**record.data, "secret": "hunter2"}
+        await s.commit()
+
+    # the owner is asked to confirm someone else's record
+    owner_service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.owner.id,
+        confirm_delete=DeleteConfirmer(runtime, w.bot, w.owner),
+    )
+    await owner_service.delete("notes", record_id)
+    call = runtime.sender.send_text.await_args
+    assert call.args[1] == w.owner.tg_user_id
+    assert "hi" in call.args[2] and "hunter2" not in call.args[2]
+    assert "2026-01-01 12:00" in call.args[2]  # in the owner's zone, not the stored UTC
+    delete = call.kwargs["buttons"].inline_keyboard[0][0].callback_data
+
+    stranger = await press(w, runtime, delete, BOB)
+    assert isinstance(stranger.await_args.args[0], AnswerCallbackQuery)
+    assert stranger.await_args.args[0].show_alert
+    assert await remaining_notes(w, runtime, w.owner) == [record_id]
+
+    await press(w, runtime, delete, TgUser(id=1001, is_bot=False, first_name="O"))
+    assert await remaining_notes(w, runtime, w.owner) == []
+
+    again = await press(w, runtime, delete, TgUser(id=1001, is_bot=False, first_name="O"))
+    answers = [c.args[0] for c in again.await_args_list]
+    assert not any(isinstance(a, AnswerCallbackQuery) and a.show_alert for a in answers)
+
+
+async def test_non_owner_save_on_shared_collection_notifies_once(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    await shared_notes(w)
+    service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        notice_shared=SharedNotice(runtime, w.bot, w.alice),
+    )
+    await service.add("notes", {"text": "one"})
+    runtime.redis.set = AsyncMock(return_value=False)
+    await service.add("notes", {"text": "two"})
+
+    runtime.sender.send_text.assert_awaited_once()
+    assert runtime.sender.send_text.await_args.args[1] == ALICE.id
+
+
+async def test_data_off_reaches_the_delegator(data_world, monkeypatch) -> None:
+    from obot.telegram import toolkit as toolkit_module
+
+    w = data_world
+    runtime = runtime_for(w)
+    peer = SimpleNamespace(username="peer", display_name="Peer", persona=None)
+    monkeypatch.setattr(toolkit_module, "user_bots", AsyncMock(return_value=[peer]))
+    seen = {}
+
+    class Spy:
+        def __init__(self, runtime, bot, payer, **kwargs) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(toolkit_module, "Delegator", Spy)
+    await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice, data=False)
+    assert seen == {"data": False}
+
+
+def test_tasks_to_groups_get_no_data() -> None:
+    from obot.telegram.task_runner import delivers_to_group
+
+    assert delivers_to_group(SimpleNamespace(tg_chat_id=-100123))
+    assert not delivers_to_group(SimpleNamespace(tg_chat_id=2002))
+
+
+async def test_run_step_leaves_data_out_for_group_scope(monkeypatch) -> None:
+    from obot.telegram import task_runner
+
+    class Stop(Exception):
+        pass
+
+    seen = {}
+
+    async def fake_toolkit(*args, **kwargs):
+        seen.update(kwargs)
+        raise Stop
+
+    monkeypatch.setattr(task_runner, "toolkit", fake_toolkit)
+    monkeypatch.setattr(task_runner, "reply_model", AsyncMock(return_value=None))
+    bot = SimpleNamespace(tools=[])
+    for chat_id, expected in ((-100, False), (5, True)):
+        scope = SimpleNamespace(tg_chat_id=chat_id)
+        try:
+            await task_runner._run_step(
+                None,
+                SimpleNamespace(pricing=None, models=None, cipher=None),
+                bot,
+                None,
+                True,
+                "p",
+                None,
+                scope,
+                "q",
+            )
+        except Stop:
+            pass
+        assert seen["data"] is expected

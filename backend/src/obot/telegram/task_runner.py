@@ -99,6 +99,11 @@ async def _step_bot(
     return peer
 
 
+def delivers_to_group(scope: ChatScope) -> bool:
+    """Task output goes to a group or channel (negative chat id): no personal or shared data."""
+    return scope.tg_chat_id is not None and scope.tg_chat_id < 0
+
+
 async def _run_step(
     session,
     runtime: Runtime,
@@ -120,7 +125,15 @@ async def _run_step(
         session, runtime.models, runtime.cipher, runtime.pricing, bot_record, payer
     )
     # Another bot doing a step works like ask_bot: it cannot delegate further.
-    kit = await toolkit(session, runtime, bot_record, started, payer, delegation=own)
+    kit = await toolkit(
+        session,
+        runtime,
+        bot_record,
+        started,
+        payer,
+        delegation=own,
+        data=not delivers_to_group(scope),
+    )
     reply = await generate_reply(
         chosen.model,
         BotProfile(name=bot_record.display_name, persona=bot_record.persona),
