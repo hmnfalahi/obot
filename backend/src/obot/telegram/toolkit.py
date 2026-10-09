@@ -14,7 +14,7 @@ from obot.core.custom_api import endpoints_note
 from obot.core.tools import PERSONAL_DATA, ToolServices, build_tools
 from obot.data.service import DataService
 from obot.db.models import Bot, User
-from obot.telegram.data_chat import DeleteConfirmer, SharedNotice
+from obot.telegram.data_chat import DefineProposer, DeleteConfirmer, SharedNotice
 from obot.telegram.delegation import Delegator, delegation_note
 from obot.telegram.runtime import Runtime
 
@@ -66,6 +66,7 @@ async def toolkit(
     if peers:
         services.delegate = Delegator(runtime, bot, payer, data=data)
     data_note = None
+    personal = PERSONAL_DATA in (bot.tools or [])
     if data:
         owner = await session.get(User, bot.owner_id) or payer
         service = DataService(
@@ -75,8 +76,9 @@ async def toolkit(
             payer.id,
             notice_shared=SharedNotice(runtime, bot, payer),
             confirm_delete=DeleteConfirmer(runtime, bot, payer, owner_timezone=owner.timezone),
+            propose_define=DefineProposer(runtime, bot, payer) if personal else None,
         )
-        data_note = await service.note(session, now, can_define=PERSONAL_DATA in (bot.tools or []))
+        data_note = await service.note(session, now, can_define=personal)
         if data_note:
             services.data = service
     return Toolkit(
@@ -86,6 +88,7 @@ async def toolkit(
             delegation=bool(peers),
             scheduling=schedule is not None,
             data=services.data is not None,
+            define=personal and services.data is not None,
         ),
         services=services,
         note=join_notes(note, delegation_note(peers), endpoints_note(apis), data_note),

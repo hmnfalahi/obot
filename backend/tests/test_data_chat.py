@@ -8,14 +8,21 @@ from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from obot.bots.users import join_bot
-from obot.core.tools import DATA_TOOLS, ToolServices, build_tools, data_add
+from obot.core.tools import (
+    DATA_TOOLS,
+    DEFINE_TOOL,
+    ToolServices,
+    build_tools,
+    data_add,
+    data_define,
+)
 from obot.data.query import find_records
 from obot.data.repository import create_collection, get_collection
 from obot.data.schema import CollectionSchema
 from obot.data.service import DataService
 from obot.db.models import BotVisibility, CollectionScope, Record
 from obot.telegram import data_chat
-from obot.telegram.data_chat import DeleteConfirmer, SharedNotice
+from obot.telegram.data_chat import DefineProposer, DeleteConfirmer, SharedNotice
 from obot.telegram.toolkit import toolkit
 
 EXPENSES = CollectionSchema.model_validate(
@@ -380,3 +387,127 @@ async def test_switch_gives_data_tools_without_collections(data_world) -> None:
     assert "no data collections yet" in kit.note
     in_group = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice, data=False)
     assert not {t.name for t in in_group.tools} & set(DATA_TOOLS)
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.data: dict[str, object] = {}
+
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.data:
+            return False
+        self.data[key] = value
+        return True
+
+    async def get(self, key):
+        return self.data.get(key)
+
+    async def delete(self, key):
+        return int(self.data.pop(key, None) is not None)
+
+
+WEIGHT = [
+    {"key": "day", "label": "Day", "type": "date", "required": True},
+    {"key": "kg", "label": "Weight", "type": "number", "required": True},
+]
+
+
+def test_define_tool_only_with_the_switch() -> None:
+    assert DEFINE_TOOL not in {t.name for t in build_tools([], data=True)}
+    assert DEFINE_TOOL in {t.name for t in build_tools([], data=True, define=True)}
+
+
+async def test_define_tool_needs_a_data_service() -> None:
+    ctx = SimpleNamespace(deps=ToolServices(http=None, meter=None))
+    assert (await data_define(ctx, "weight", "Weight", [])).startswith("ERROR:")
+
+
+async def test_toolkit_offers_data_define_only_with_the_switch(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    await expenses(w)
+    plain = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    w.bot.tools = ["personal_data"]
+    switched = await toolkit(w.session, runtime, w.bot, datetime.now(UTC), w.alice)
+    assert DEFINE_TOOL not in {t.name for t in plain.tools}
+    assert DEFINE_TOOL in {t.name for t in switched.tools}
+
+
+async def press_define(w, runtime, data: str, who: TgUser) -> AsyncMock:
+    client = AsyncMock()
+    message = Message(
+        message_id=4, date=datetime.now(UTC), chat=Chat(id=who.id, type="private"), text="card"
+    ).as_(client)
+    query = CallbackQuery(id="q", from_user=who, chat_instance="c", data=data, message=message).as_(
+        client
+    )
+    await data_chat.on_define_button(query, w.session, w.bot, runtime)
+    return client
+
+
+async def test_save_creates_the_collection_only_for_its_person(data_world) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    runtime.redis = FakeRedis()
+    await w.session.commit()
+    service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        propose_define=DefineProposer(runtime, w.bot, w.alice),
+    )
+
+    told = await service.define("weight", "My weight", WEIGHT)
+
+    assert "Save" in told
+    call = runtime.sender.send_text.await_args
+    assert call.args[1] == ALICE.id and "My weight" in call.args[2]
+    save, cancel = (b.callback_data for b in call.kwargs["buttons"].inline_keyboard[0])
+    assert save.startswith("datadef:ok:") and cancel.startswith("datadef:no:")
+
+    stranger = await press_define(w, runtime, save, BOB)
+    alert = stranger.await_args.args[0]
+    assert isinstance(alert, AnswerCallbackQuery) and alert.show_alert
+    assert "no collection named 'weight'" in await service.find("weight")
+
+    await press_define(w, runtime, save, ALICE)
+    assert await service.find("weight") == "No records."  # it exists now
+    again = await press_define(w, runtime, save, ALICE)  # second press: expired, no crash
+    assert again.await_count >= 1
+
+
+async def test_cancel_drops_the_proposal(data_world) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    runtime.redis = FakeRedis()
+    await w.session.commit()
+    service = DataService(
+        runtime.sessionmaker,
+        w.pricing,
+        w.bot.id,
+        w.alice.id,
+        propose_define=DefineProposer(runtime, w.bot, w.alice),
+    )
+    await service.define("weight", "My weight", WEIGHT)
+    save, cancel = (
+        b.callback_data
+        for b in runtime.sender.send_text.await_args.kwargs["buttons"].inline_keyboard[0]
+    )
+
+    await press_define(w, runtime, cancel, ALICE)
+    await press_define(w, runtime, save, ALICE)
+
+    assert runtime.redis.data == {}
+    assert "no collection named 'weight'" in await service.find("weight")
+
+
+async def test_unparseable_proposal_is_treated_as_expired(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    runtime.redis = FakeRedis()
+    runtime.redis.data["data-define:tok"] = "not json"
+    await press_define(w, runtime, "datadef:ok:tok", ALICE)
+    assert runtime.redis.data == {}
