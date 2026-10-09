@@ -3,6 +3,8 @@ import { api, type Lang, type Me } from './api'
 import { I18n, translator } from './i18n'
 import { BotPage } from './pages/BotPage'
 import { BotsPage } from './pages/BotsPage'
+import { CollectionPage } from './pages/CollectionPage'
+import { DataPage } from './pages/DataPage'
 import { MySettingsPage } from './pages/MySettingsPage'
 import { NewBotPage } from './pages/NewBotPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -17,13 +19,21 @@ export type Route =
   | { page: 'settings' }
   | { page: 'tasks' }
   | { page: 'mine'; id: number }
+  | { page: 'data'; botId: number }
+  | { page: 'collection'; botId: number; collectionId: number }
 
 /** The factory opens one bot with ?bot=<id> (web_app button) or start_param "bot_<id>" (link),
- * and someone's own settings for a bot with ?mine=<id>. */
+ * someone's own settings for a bot with ?mine=<id>, a bot's data with ?data=<id> and one of its
+ * lists with start_param "data_<bot>_<collection>". */
 function initialRoute(): Route {
-  const mine = Number(new URLSearchParams(window.location.search).get('mine'))
+  const search = new URLSearchParams(window.location.search)
+  const mine = Number(search.get('mine'))
   if (mine > 0) return { page: 'mine', id: mine }
-  const fromQuery = new URLSearchParams(window.location.search).get('bot')
+  const list = /^data_(\d+)_(\d+)$/.exec(startParam() ?? '')
+  if (list) return { page: 'collection', botId: Number(list[1]), collectionId: Number(list[2]) }
+  const data = Number(search.get('data'))
+  if (data > 0) return { page: 'data', botId: data }
+  const fromQuery = search.get('bot')
   const fromStart = /^bot_(\d+)$/.exec(startParam() ?? '')?.[1]
   const id = Number(fromQuery ?? fromStart)
   return id > 0 ? { page: 'bot', id } : { page: 'bots' }
@@ -53,15 +63,16 @@ export default function App() {
     document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr'
   }, [lang])
 
-  // Telegram's back button returns to the bot list from any inner page.
+  // Telegram's back button returns to the bot list from any inner page, and from a list to its bot's data.
   useEffect(() => {
     const back = webApp?.BackButton
     if (!back) return
-    const goHome = () => setRoute({ page: 'bots' })
+    const goBack = () =>
+      setRoute(route.page === 'collection' ? { page: 'data', botId: route.botId } : { page: 'bots' })
     if (route.page === 'bots') back.hide()
     else back.show()
-    back.onClick(goHome)
-    return () => back.offClick(goHome)
+    back.onClick(goBack)
+    return () => back.offClick(goBack)
   }, [route])
 
   let content
@@ -69,6 +80,9 @@ export default function App() {
   else if (!me) content = <Loading />
   else if (route.page === 'bot') content = <BotPage id={route.id} me={me} navigate={setRoute} />
   else if (route.page === 'mine') content = <MySettingsPage id={route.id} navigate={setRoute} />
+  else if (route.page === 'data') content = <DataPage botId={route.botId} navigate={setRoute} />
+  else if (route.page === 'collection')
+    content = <CollectionPage botId={route.botId} collectionId={route.collectionId} navigate={setRoute} />
   else if (route.page === 'new') content = <NewBotPage onDone={() => setRoute({ page: 'bots' })} />
   else if (route.page === 'settings') content = <SettingsPage me={me} onChange={setMe} />
   else if (route.page === 'tasks') content = <TasksPage me={me} />

@@ -223,3 +223,29 @@ button {
   justify-content: space-between;
   padding: 4px 0;
 }
+
+.cal-day h3 {
+  font-size: 14px;
+  margin: 12px 4px 4px;
+}
+
+.cal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  width: 100%;
+  border: none;
+  text-align: start;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 12px;
+}

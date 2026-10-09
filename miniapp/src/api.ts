@@ -193,12 +193,103 @@ export interface StarPackage {
   credits: number
 }
 
+export type FieldType =
+  | 'text'
+  | 'number'
+  | 'money'
+  | 'date'
+  | 'time'
+  | 'datetime'
+  | 'choice'
+  | 'boolean'
+  | 'phone'
+
+export interface FieldDef {
+  key: string
+  label: Record<string, string>
+  type: FieldType
+  required: boolean
+  options: string[]
+  min: string | null
+  max: string | null
+  currency: string | null
+  public: boolean
+  hidden: boolean
+}
+
+export interface Rules {
+  unique?: string[][]
+  allowed_hours?: {
+    date_field: string
+    time_field: string | null
+    windows: { weekdays: number[]; start: string; end: string }[]
+  } | null
+}
+
+export interface CollectionEvents {
+  notify?: { on: 'create' | 'update' | 'delete'; to: 'owner' | 'author' }[]
+  remind?: { date_field: string; time_field: string | null; before_minutes: number; to: 'owner' | 'author' }[]
+}
+
+/** One of a bot's lists, as the caller may see it. */
+export interface DataCollection {
+  id: number
+  key: string
+  title: Record<string, string>
+  scope: 'personal' | 'shared' | 'group'
+  mine: boolean
+  can_edit: boolean
+  schema_version: number
+  fields: FieldDef[]
+  rules: Rules
+  events: CollectionEvents
+  /** The zone the collection's dates and times are in. */
+  timezone: string
+}
+
+export interface DataRecord {
+  id: number
+  /** Datetimes are UTC ("...Z"); numbers and money are decimal strings. */
+  data: Record<string, unknown>
+  version: number
+  created_at: string
+  mine: boolean
+}
+
+export interface DataFilter {
+  field: string
+  op: 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte' | 'contains' | 'in'
+  value: unknown
+}
+
+/** A structured data error from the API (see obot/api/data_routes.py). */
+export interface DataErrorDetail {
+  code: string
+  message: string
+  errors: { field: string; reason: string }[]
+  fields: string[]
+  change?: string | null
+  limit?: string
+}
+
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** The response's raw `detail`, e.g. a DataErrorDetail. */
+  detail: unknown
+  constructor(status: number, message: string, detail?: unknown) {
     super(message)
     this.status = status
+    this.detail = detail
   }
+}
+
+/** The structured data error behind `e`, if it is one. */
+export function dataErrorOf(e: unknown): DataErrorDetail | null {
+  if (!(e instanceof ApiError)) return null
+  const detail = e.detail as Partial<DataErrorDetail> | null
+  return detail && typeof detail === 'object' && typeof detail.code === 'string'
+    ? { errors: [], fields: [], message: '', ...detail, code: detail.code }
+    : null
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -211,14 +302,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   if (!response.ok) {
-    let detail = response.statusText
+    let message = response.statusText
+    let detail: unknown
     try {
       const data = await response.json()
-      detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+      detail = data.detail
+      message = typeof detail === 'string' ? detail : JSON.stringify(detail)
     } catch {
       // keep statusText
     }
-    throw new ApiError(response.status, detail)
+    throw new ApiError(response.status, message, detail)
   }
   return response.status === 204 ? (undefined as T) : response.json()
 }
@@ -253,6 +346,39 @@ export const api = {
   packages: () => request<StarPackage[]>('GET', '/billing/packages'),
   invoice: (packageId: string) =>
     request<{ link: string }>('POST', '/billing/invoice', { package_id: packageId }),
+  collections: (botId: number) => request<DataCollection[]>('GET', `/bots/${botId}/collections`),
+  records: (
+    botId: number,
+    collectionId: number,
+    params: { q?: string; sort?: string; desc?: boolean; filters?: DataFilter[]; offset?: number; limit?: number },
+  ) => {
+    const query = new URLSearchParams()
+    if (params.q) query.set('q', params.q)
+    if (params.sort) query.set('sort', params.sort)
+    if (params.desc !== undefined) query.set('desc', String(params.desc))
+    if (params.filters?.length) query.set('filters', JSON.stringify(params.filters))
+    if (params.offset) query.set('offset', String(params.offset))
+    if (params.limit) query.set('limit', String(params.limit))
+    return request<{ records: DataRecord[]; has_more: boolean }>(
+      'GET',
+      `/bots/${botId}/collections/${collectionId}/records?${query}`,
+    )
+  },
+  addRecord: (botId: number, collectionId: number, data: Record<string, unknown>) =>
+    request<DataRecord>('POST', `/bots/${botId}/collections/${collectionId}/records`, { data }),
+  updateRecord: (
+    botId: number,
+    collectionId: number,
+    id: number,
+    changes: Record<string, unknown>,
+    version: number,
+  ) =>
+    request<DataRecord>('PATCH', `/bots/${botId}/collections/${collectionId}/records/${id}`, {
+      changes,
+      version,
+    }),
+  deleteRecord: (botId: number, collectionId: number, id: number) =>
+    request<void>('DELETE', `/bots/${botId}/collections/${collectionId}/records/${id}`),
   newBot: (body: NewBot) =>
     request<{ create_link: string; suggested_username: string }>('POST', '/bots/drafts', body),
 }
