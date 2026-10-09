@@ -5,6 +5,7 @@ template collections through obot.data. It never deletes data: a collection miss
 draft is left alone and a field missing from it is hidden.
 """
 
+import logging
 import re
 from typing import Literal
 
@@ -12,7 +13,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
-from obot.data.errors import DataError, InvalidSchema
+from obot.data.errors import DataError, InvalidSchema, LimitReached
 from obot.data.format import describe_error
 from obot.data.repository import (
     check_shared_unique,
@@ -23,6 +24,8 @@ from obot.data.repository import (
 )
 from obot.data.schema import KEY_PATTERN, CollectionSchema
 from obot.db.models import Bot, Collection, CollectionScope
+
+log = logging.getLogger(__name__)
 
 FieldType = Literal[
     "text", "number", "money", "date", "time", "datetime", "choice", "boolean", "phone"
@@ -48,7 +51,7 @@ class DraftField(BaseModel):
 class DraftWindow(BaseModel):
     weekdays: list[int] = Field(description="0 = Monday … 5 = Saturday, 6 = Sunday.")
     start: str = Field(description="HH:MM")
-    end: str = Field(description="HH:MM, exclusive")
+    end: str = Field(description="HH:MM, exclusive; use 23:59 for end of day")
 
 
 class DraftHours(BaseModel):
@@ -75,10 +78,23 @@ class CollectionDraft(BaseModel):
     allowed_hours: DraftHours | None = None
 
 
-def to_schema(d: CollectionDraft, lang: str) -> CollectionSchema:
-    """The draft as a CollectionSchema; InvalidSchema names the collection's key."""
+def _reasons(e: ValidationError, hidden: int = 0) -> str:
+    out = []
+    for err in e.errors():
+        loc = ".".join(str(p) for p in err["loc"])
+        msg = err["msg"].removeprefix("Value error, ")
+        if err["loc"] == ("fields",) and err["type"] == "too_long":
+            msg = f"too many fields, including {hidden} hidden ones"
+        elif loc and not msg.startswith(loc.split(".")[-1]):
+            msg = f"{loc}: {msg}"
+        out.append(msg)
+    return "; ".join(out)
+
+
+def _schema_of(d: CollectionDraft, lang: str) -> CollectionSchema:
+    """to_schema without the key prefix on its errors."""
     if not re.fullmatch(KEY_PATTERN, d.key):
-        raise InvalidSchema(f"{d.key}: the key must be a lowercase latin slug")
+        raise InvalidSchema("the key must be a lowercase latin slug")
     data = {
         "fields": [
             {**f.model_dump(exclude={"label"}, exclude_none=True), "label": {lang: f.label}}
@@ -91,13 +107,18 @@ def to_schema(d: CollectionDraft, lang: str) -> CollectionSchema:
     }
     try:
         schema = CollectionSchema.model_validate(data)
-        check_shared_unique(CollectionScope(d.scope), schema)
     except ValidationError as e:
-        reasons = "; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors())
-        raise InvalidSchema(f"{d.key}: {reasons}") from None
+        raise InvalidSchema(_reasons(e)) from None
+    check_shared_unique(CollectionScope(d.scope), schema)
+    return schema
+
+
+def to_schema(d: CollectionDraft, lang: str) -> CollectionSchema:
+    """The draft as a CollectionSchema; InvalidSchema names the collection's key."""
+    try:
+        return _schema_of(d, lang)
     except InvalidSchema as e:
         raise InvalidSchema(f"{d.key}: {e}") from None
-    return schema
 
 
 def from_collection(c: Collection, lang: str) -> CollectionDraft:
@@ -141,7 +162,9 @@ def from_collection(c: Collection, lang: str) -> CollectionDraft:
 
 def merge_schema(old: CollectionSchema, new: CollectionSchema) -> CollectionSchema:
     """`new` applied over `old`: old fields missing from `new` stay, hidden; labels merge by
-    language so other languages' labels are kept. Rules come from `new`."""
+    language so other languages' labels are kept. Existing fields keep their order and new ones
+    are appended. min/max/currency the draft leaves unset are kept from the old field. Rules come
+    from `new`."""
     new_fields = new.field_map()
     fields = []
     for f in old.fields:
@@ -149,15 +172,19 @@ def merge_schema(old: CollectionSchema, new: CollectionSchema) -> CollectionSche
         if n is None:
             fields.append(f.model_copy(update={"hidden": True}))
         else:
-            fields.append(n.model_copy(update={"label": {**f.label, **n.label}}))
+            keep = {k: getattr(f, k) for k in ("min", "max", "currency") if getattr(n, k) is None}
+            fields.append(n.model_copy(update={"label": {**f.label, **n.label}, **keep}))
     old_keys = old.field_map()
     fields += [n for n in new.fields if n.key not in old_keys]
-    return CollectionSchema.model_validate(
-        {
-            "fields": [f.model_dump(mode="json") for f in fields],
-            "rules": new.rules.model_dump(mode="json"),
-        }
-    )
+    try:
+        return CollectionSchema.model_validate(
+            {
+                "fields": [f.model_dump(mode="json") for f in fields],
+                "rules": new.rules.model_dump(mode="json"),
+            }
+        )
+    except ValidationError as e:
+        raise InvalidSchema(_reasons(e, hidden=sum(f.hidden for f in fields))) from None
 
 
 async def sync_collections(
@@ -178,7 +205,7 @@ async def sync_collections(
     for d in drafts:
         try:
             async with session.begin_nested():
-                schema = to_schema(d, lang)
+                schema = _schema_of(d, lang)
                 c = existing.get(d.key)
                 if c is None:
                     await create_collection(
@@ -202,7 +229,16 @@ async def sync_collections(
                 if c.title.get(lang) != d.title:
                     c.title = {**c.title, lang: d.title}
                     await session.flush()
+        except LimitReached as e:
+            if e.limit == "collections":
+                problems.append(f"{d.title}: your plan's limit of lists is reached")
+            else:
+                reason = describe_error(e).removeprefix("ERROR: ").rstrip(".")
+                problems.append(f"{d.title}: {reason}")
         except DataError as e:
             reason = describe_error(e).removeprefix("ERROR: ").rstrip(".")
             problems.append(f"{d.title}: {reason}")
+        except Exception:
+            log.exception("syncing collection %r of bot %s failed", d.key, bot.id)
+            problems.append(f"{d.title}: could not be saved, try again later")
     return problems
