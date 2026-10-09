@@ -68,9 +68,13 @@ def require_visible(space: DataSpace, c: Collection) -> None:
         raise CollectionNotFound(c.key)
 
 
-def row_filter(space: DataSpace, c: Collection) -> list[ColumnElement[bool]]:
-    """WHERE clauses selecting the live records of `c` this space may read."""
-    clauses = [Record.collection_id == c.id, Record.deleted_at.is_(None)]
+def row_filter(
+    space: DataSpace, c: Collection, *, deleted: bool = False
+) -> list[ColumnElement[bool]]:
+    """WHERE clauses selecting the live (or, with `deleted`, the soft-deleted) records of `c`
+    this space may read."""
+    gone = Record.deleted_at.is_not(None) if deleted else Record.deleted_at.is_(None)
+    clauses = [Record.collection_id == c.id, gone]
     match c.scope:
         case CollectionScope.PERSONAL:
             clauses.append(Record.author_user_id == space.user_id)

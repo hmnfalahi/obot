@@ -7,14 +7,19 @@ from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import select
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.bots.access import can_use
 from obot.bots.users import started_user
 from obot.data.errors import DataError, RecordNotFound
-from obot.data.repository import collection_by_id, collection_schema, delete_record
+from obot.data.repository import (
+    MAX_ID,
+    collection_by_id,
+    collection_schema,
+    delete_record,
+    was_deleted,
+)
 from obot.data.schema import FieldDef, FieldType
 from obot.data.space import space_for
 from obot.db.models import Bot as BotRecord
@@ -127,6 +132,8 @@ class DeleteConfirmer:
 
 
 async def _edit(query: CallbackQuery, text: str) -> None:
+    if not isinstance(query.message, Message):
+        return  # too old for Telegram to hand over
     try:
         await query.message.edit_text(text)
     except TelegramAPIError:
@@ -139,10 +146,13 @@ async def on_data_button(
 ) -> None:
     lang = lang_of(query.from_user.language_code)
     parts = query.data.split(":")
-    if len(parts) != 4 or not (parts[2].isdigit() and parts[3].isdigit()):
+    if len(parts) != 4 or not (parts[2].isdecimal() and parts[3].isdecimal()):
         await query.answer()
         return
     _, action, collection_id, record_id = parts
+    if not (1 <= int(collection_id) <= MAX_ID and 1 <= int(record_id) <= MAX_ID):
+        await query.answer()
+        return
     if action == "keep":
         await query.answer()
         await _edit(query, t(lang, "data.kept"))
@@ -157,14 +167,7 @@ async def on_data_button(
         c = await collection_by_id(session, space, int(collection_id))
         await delete_record(session, space, c, int(record_id))
     except RecordNotFound:
-        gone = await session.scalar(
-            select(Record).where(
-                Record.id == int(record_id),
-                Record.collection_id == int(collection_id),
-                Record.deleted_at.is_not(None),
-            )
-        )
-        if gone is None or user.id not in (gone.author_user_id, bot_record.owner_id):
+        if not await was_deleted(session, space, c, int(record_id)):
             await query.answer(t(lang, "data.not_yours"), show_alert=True)
             return
         # Pressed twice: it is already deleted.

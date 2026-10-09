@@ -79,22 +79,22 @@ class Delegator:
             # Imported here: the toolkit builds Delegators itself.
             from obot.telegram.toolkit import toolkit
 
-            # Depth 1: the callee gets its tools except delegation itself.
-            kit = await toolkit(
-                session,
-                runtime,
-                callee,
-                now,
-                payer,
-                delegation=False,
-                data=self._data,
-                note=(
-                    f"This question comes from {self._caller_name}, another bot working for "
-                    "someone who uses you, not from a person. Answer it directly and "
-                    "completely."
-                ),
-            )
             try:
+                # Depth 1: the callee gets its tools except delegation itself.
+                kit = await toolkit(
+                    session,
+                    runtime,
+                    callee,
+                    now,
+                    payer,
+                    delegation=False,
+                    data=self._data,
+                    note=(
+                        f"This question comes from {self._caller_name}, another bot working for "
+                        "someone who uses you, not from a person. Answer it directly and "
+                        "completely."
+                    ),
+                )
                 reply = await generate_reply(
                     chosen.model,
                     BotProfile(name=callee.display_name, persona=callee.persona),

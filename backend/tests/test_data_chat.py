@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from aiogram.methods import AnswerCallbackQuery
+from aiogram.methods import AnswerCallbackQuery, EditMessageText
 from aiogram.types import CallbackQuery, Chat, Message
 from aiogram.types import User as TgUser
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -291,3 +291,73 @@ async def test_run_step_leaves_data_out_for_group_scope(monkeypatch) -> None:
         except Stop:
             pass
         assert seen["data"] is expected
+
+
+def alerted(client) -> bool:
+    answers = [c.args[0] for c in client.await_args_list]
+    return any(isinstance(a, AnswerCallbackQuery) and a.show_alert for a in answers)
+
+
+async def test_already_deleted_card_answers_by_read_and_change_rules(data_world) -> None:
+    w = data_world
+    w.bot.visibility = BotVisibility.PUBLIC
+    runtime = runtime_for(w)
+    c = await expenses(w)
+    await join_bot(w.session, w.bot, 1001, "en")
+    await w.session.commit()
+    alice = DataService(runtime.sessionmaker, w.pricing, w.bot.id, w.alice.id)
+    saved = await alice.add("expenses", {"amount": 7})
+    delete = f"data:del:{c.id}:{int(saved.split('#')[1].split(':')[0])}"
+    owner = TgUser(id=1001, is_bot=False, first_name="O")
+
+    assert not alerted(await press(w, runtime, delete, ALICE))
+    again = await press(w, runtime, delete, ALICE)
+    assert not alerted(again)
+    assert any(isinstance(c.args[0], EditMessageText) for c in again.await_args_list)
+    # The owner cannot read Alice's personal record, deleted or not.
+    assert alerted(await press(w, runtime, delete, owner))
+
+
+async def test_forged_buttons_get_a_plain_answer(data_world) -> None:
+    w = data_world
+    runtime = runtime_for(w)
+    await expenses(w)
+    for forged in ("data:del:²:1", f"data:del:1:{2**63}", "data:del:1:0"):
+        client = await press(w, runtime, forged, ALICE)
+        assert not alerted(client)
+
+
+async def test_inaccessible_message_is_not_edited() -> None:
+    from aiogram.types import InaccessibleMessage
+
+    message = InaccessibleMessage(chat=Chat(id=1, type="private"), message_id=3)
+    query = SimpleNamespace(message=message)
+    await data_chat._edit(query, "x")  # no AttributeError
+    await data_chat._edit(SimpleNamespace(message=None), "x")
+
+
+async def test_data_filter_keeps_integers_through_the_agent() -> None:
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    seen = []
+
+    class Recorder:
+        async def find(self, collection, filters, *args):
+            seen.append(filters)
+            return "none"
+
+    async def respond(messages, info):
+        if len(messages) == 1:
+            args = {"collection": "rooms", "filters": [{"field": "room", "op": "eq", "value": 12}]}
+            return ModelResponse(parts=[ToolCallPart("data_find", args)])
+        return ModelResponse(parts=[TextPart("done")])
+
+    tools = [t for t in build_tools([], data=True) if t.name == "data_find"]
+    agent = Agent(FunctionModel(respond), tools=tools, deps_type=ToolServices)
+    services = ToolServices(http=None, meter=None, data=Recorder())
+    await agent.run("go", deps=services)
+
+    value = seen[0][0]["value"]
+    assert value == 12 and type(value) is int
