@@ -66,3 +66,12 @@ async def test_telegram_errors_mean_not_admin_and_are_not_cached() -> None:
     check = CachedGroupAdmin(redis, client_with(None, error=True), 7, -100, 2002)
     assert await check() is False
     assert redis.data == {}
+
+
+async def test_cached_no_is_read_back_without_asking_telegram() -> None:
+    redis = FakeRedis()
+    redis.data["group-admin:7:-100:2002"] = b"0"
+    client = client_with(ChatMemberStatus.ADMINISTRATOR)
+
+    assert await CachedGroupAdmin(redis, client, 7, -100, 2002)() is False
+    client.get_chat_member.assert_not_awaited()

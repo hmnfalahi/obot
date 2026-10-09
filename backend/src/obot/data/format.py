@@ -149,8 +149,9 @@ def describe_group_only(collections: list[Collection]) -> str | None:
         return None
     titles = ", ".join(" / ".join(dict.fromkeys(c.title.values())) or c.key for c in collections)
     return (
-        f"These lists belong to the groups you are in and are not available in this private "
-        f"chat: {titles}. If the user asks about them, tell them to mention you in that group."
+        f"These lists are kept separately for each Telegram group this bot is in and are not "
+        f"available in this private chat: {titles}. If the user asks about them, tell them to "
+        f"mention you in that group."
     )
 
 
