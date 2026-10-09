@@ -10,7 +10,7 @@ import {
   type Rules,
 } from '../api'
 import type { Route } from '../App'
-import { hasText, titleOf, useI18n, type Translate } from '../i18n'
+import { formatNumber, hasText, titleOf, useI18n, type Translate } from '../i18n'
 import { useLoad } from '../hooks'
 import { haptic } from '../telegram'
 import { ErrorBox, Loading } from '../ui'
@@ -72,7 +72,8 @@ export function SchemaPage(props: { botId: number; collectionId: number; navigat
         onFailed={failed('schema')}
       />
       <EventsEditor
-        key={`${c.id}:${c.schema_version}:${JSON.stringify(c.events)}`}
+        // A schema save restarts this editor only when what it shows changed.
+        key={`${c.id}:${JSON.stringify(c.events)}:${eventFieldsKey(c)}`}
         botId={botId}
         c={c}
         notice={shown('events')}
@@ -149,6 +150,17 @@ function SchemaEditor({ botId, c, notice, onBusy, onSaved, onFailed }: EditorPro
   }
   const update = (key: string, change: Partial<FieldDef>) =>
     setFields(fields.map((f) => (f.key === key ? { ...f, ...change } : f)))
+
+  const saved = new Map(c.fields.map((f) => [f.key, f]))
+  // The server refuses a hidden required field coming back as required, so it comes back optional.
+  const unhidesOptional = (key: string) => !!saved.get(key)?.hidden && !!saved.get(key)?.required
+  const toggleHidden = (f: FieldDef) =>
+    update(
+      f.key,
+      f.hidden
+        ? { hidden: false, required: unhidesOptional(f.key) ? false : f.required }
+        : { hidden: true, required: saved.get(f.key)?.required ?? f.required },
+    )
 
   const keyTaken = fields.some((f) => f.key === draft.key)
   const keyBad = draft.key !== '' && !KEY_PATTERN.test(draft.key)
@@ -272,11 +284,12 @@ function SchemaEditor({ botId, c, notice, onBusy, onSaved, onFailed }: EditorPro
                   {t('delete')}
                 </button>
               ) : (
-                <button className="btn secondary" onClick={() => update(f.key, { hidden: !f.hidden })}>
+                <button className="btn secondary" onClick={() => toggleHidden(f)}>
                   {f.hidden ? t('showField') : t('hideField')}
                 </button>
               )}
             </div>
+            {f.hidden && unhidesOptional(f.key) && <p className="hint">{t('unhideOptional')}</p>}
           </div>
         )
       })}
@@ -396,6 +409,14 @@ function windowsText(windows: { weekdays: number[]; start: string; end: string }
     .join(lang === 'fa' ? '؛ ' : '; ')
 }
 
+/** The date and time fields the events editor offers, as a key. */
+function eventFieldsKey(c: DataCollection): string {
+  return c.fields
+    .filter((f) => f.type === 'date' || f.type === 'datetime' || f.type === 'time')
+    .map((f) => `${f.key}:${f.type}:${f.hidden}`)
+    .join(',')
+}
+
 type Remind = NonNullable<CollectionEvents['remind']>[number]
 type Notify = NonNullable<CollectionEvents['notify']>[number]
 
@@ -481,6 +502,7 @@ function EventsEditor({ botId, c, notice, onBusy, onSaved, onFailed }: EditorPro
             </label>
           </>
         )}
+        {dateFields.length === 0 && <p className="hint">{t('reminderNeedsDate')}</p>}
         {dateFields.length > 0 && (
           <>
             <strong>{t('reminder')}</strong>
@@ -522,11 +544,16 @@ function EventsEditor({ botId, c, notice, onBusy, onSaved, onFailed }: EditorPro
                 {!minutesOk && <div className="field-error">{t('reminderMinutesHint')}</div>}
               </>
             )}
+            {otherReminders.length > 0 && (
+              <p className="hint">{t('otherReminders', { n: formatNumber(otherReminders.length, lang) })}</p>
+            )}
           </>
         )}
-        <button className="btn block" disabled={busy || !reminderOk} onClick={save}>
-          {t('saveEvents')}
-        </button>
+        {(shared || dateFields.length > 0) && (
+          <button className="btn block" disabled={busy || !reminderOk} onClick={save}>
+            {t('saveEvents')}
+          </button>
+        )}
         <NoticeLine notice={notice} />
       </div>
     </>
