@@ -140,6 +140,8 @@ RETRYABLE = {"40P01", "40001"}
 
 
 def parse_filters(raw: list[dict[str, Any]] | None) -> list[Filter]:
+    if raw is not None and not isinstance(raw, list):
+        raise InvalidQuery("filters must be a list of {field, op, value}")
     filters = []
     for item in raw or []:
         try:

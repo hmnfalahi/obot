@@ -16,6 +16,7 @@ from obot.data.errors import (
     CollectionNotFound,
     DataError,
     DuplicateRecord,
+    InvalidQuery,
     LimitReached,
     NotAllowed,
     RecordInvalid,
@@ -132,7 +133,7 @@ def collection_out(c: Collection, bot: Bot, user: User, space: DataSpace) -> Col
         mine=c.created_by_user_id == user.id,
         can_edit=can_edit(c, bot, user),
         schema_version=c.schema_version,
-        fields=c.schema["fields"],
+        fields=[f for f in c.schema["fields"] if can_edit(c, bot, user) or not f.get("hidden")],
         rules=c.rules,
         events=c.events or {},
         timezone=tz_for(space, c).key,
@@ -167,7 +168,7 @@ async def list_records(
     sort: str | None = None,
     desc: bool = True,
     filters: str | None = None,
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=100_000),
     limit: int = Query(default=50, ge=1, le=PAGE_MAX),
 ) -> RecordsPage:
     space, c = await _space_and_collection(session, bot, user, collection_id)
@@ -186,7 +187,7 @@ async def list_records(
             offset=offset,
         )
     except json.JSONDecodeError:
-        raise HTTPException(422, {"code": "invalid_query", "message": "bad filters"}) from None
+        raise data_error(InvalidQuery("bad filters")) from None
     except DataError as e:
         raise data_error(e) from None
     return RecordsPage(
