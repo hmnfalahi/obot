@@ -45,6 +45,22 @@ class FieldType(enum.StrEnum):
 
 
 NUMERIC_TYPES = frozenset({FieldType.NUMBER, FieldType.MONEY})
+# Types whose input may use Persian or Arabic-Indic digits. Text and choice keep their characters.
+_DIGIT_TYPES = frozenset(
+    {
+        FieldType.NUMBER,
+        FieldType.MONEY,
+        FieldType.DATE,
+        FieldType.TIME,
+        FieldType.DATETIME,
+        FieldType.PHONE,
+        FieldType.BOOLEAN,
+    }
+)
+# Persian decimal separator becomes ".", Persian/Arabic/ASCII thousands separators are dropped.
+_NUMBER_SEPARATORS = str.maketrans({"٫": ".", "٬": None, "،": None, ",": None})
+MAX_INT_DIGITS = 18
+MAX_FRACTION_DIGITS = 10
 
 
 class FieldDef(BaseModel):
@@ -137,13 +153,37 @@ class CollectionSchema(BaseModel):
         return self.field_map().get(key)
 
 
+def _plain_decimal(number: Decimal) -> str:
+    """A plain decimal string with no exponent: at most 18 integer and 10 fractional digits.
+
+    Size is checked from the digits and exponent before any formatting, so a huge exponent
+    is never expanded.
+    """
+    if number == 0:
+        return "0"
+    if number.adjusted() >= MAX_INT_DIGITS:
+        raise ValueError("number too large or too precise")
+    _, digits, exponent = number.as_tuple()
+    digits = tuple(digits)
+    while digits and digits[-1] == 0:
+        digits, exponent = digits[:-1], exponent + 1
+    if -exponent > MAX_FRACTION_DIGITS:
+        raise ValueError("number too large or too precise")
+    text = format(number, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text == "-0" else text
+
+
 def normalize_value(f: FieldDef, value: Any, tz: ZoneInfo, *, check_limits: bool = True) -> Any:
     """The stored form of `value` for `f`. ValueError with a short reason if it does not fit.
 
     `check_limits` False skips min/max, for values used in filters rather than stored.
     """
     if isinstance(value, str):
-        value = value.strip().translate(_DIGITS)
+        value = value.strip()
+        if f.type in _DIGIT_TYPES:
+            value = value.translate(_DIGITS)
     match f.type:
         case FieldType.TEXT:
             text = str(value)
@@ -154,16 +194,17 @@ def normalize_value(f: FieldDef, value: Any, tz: ZoneInfo, *, check_limits: bool
             if isinstance(value, bool):
                 raise ValueError("not a number")
             try:
-                number = Decimal(str(value).replace(",", "").replace("٬", ""))
-            except InvalidOperation:
+                number = Decimal(str(value).translate(_NUMBER_SEPARATORS))
+            except (InvalidOperation, ArithmeticError):
                 raise ValueError("not a number") from None
             if not number.is_finite():
                 raise ValueError("not a number")
+            text = _plain_decimal(number)
             if check_limits and f.min is not None and number < f.min:
                 raise ValueError(f"must be at least {f.min}")
             if check_limits and f.max is not None and number > f.max:
                 raise ValueError(f"must be at most {f.max}")
-            return format(number.normalize(), "f")
+            return text
         case FieldType.DATE:
             try:
                 return date.fromisoformat(str(value)).isoformat()
@@ -200,7 +241,7 @@ def normalize_value(f: FieldDef, value: Any, tz: ZoneInfo, *, check_limits: bool
             raise ValueError("not yes or no")
         case FieldType.PHONE:
             phone = re.sub(r"[\s\-()]", "", str(value))
-            if not re.fullmatch(r"\+?\d{7,15}", phone):
+            if not re.fullmatch(r"\+?[0-9]{7,15}", phone):
                 raise ValueError("not a phone number")
             return phone
 
@@ -224,7 +265,7 @@ def validate_record(
         if f is None or f.hidden:
             errors.append(FieldError(key, "unknown field"))
             continue
-        if value is None or value == "":
+        if value is None or (isinstance(value, str) and not value.strip()):
             result.pop(key, None)
             continue
         try:
