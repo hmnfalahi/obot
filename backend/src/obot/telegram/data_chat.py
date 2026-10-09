@@ -1,7 +1,9 @@
 """Telegram side of the data tools (SPEC 8.8): a one-time notice that a bot's owner sees
 what people save in its shared collections, and a confirm button for deletes."""
 
+import json
 import logging
+import secrets
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -13,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from obot.bots.access import can_use
 from obot.bots.users import started_user
 from obot.data.errors import DataError, RecordNotFound
+from obot.data.format import describe_error
 from obot.data.repository import (
     MAX_ID,
     collection_by_id,
@@ -21,6 +24,7 @@ from obot.data.repository import (
     was_deleted,
 )
 from obot.data.schema import FieldDef, FieldType
+from obot.data.service import Definition, apply_definition
 from obot.data.space import space_for
 from obot.db.models import Bot as BotRecord
 from obot.db.models import Collection, CollectionScope, Record, User
@@ -180,3 +184,136 @@ async def on_data_button(
     await session.commit()
     await query.answer()
     await _edit(query, t(lang, "data.deleted"))
+
+
+DEFINE_TTL = 24 * 3600
+
+TYPE_NAMES = {
+    "en": {
+        "text": "text",
+        "number": "number",
+        "money": "amount",
+        "date": "date",
+        "time": "time",
+        "datetime": "date and time",
+        "choice": "choice",
+        "boolean": "yes/no",
+        "phone": "phone",
+    },
+    "fa": {
+        "text": "متن",
+        "number": "عدد",
+        "money": "مبلغ",
+        "date": "تاریخ",
+        "time": "ساعت",
+        "datetime": "تاریخ و ساعت",
+        "choice": "انتخابی",
+        "boolean": "بله/خیر",
+        "phone": "تلفن",
+    },
+}
+
+
+def definition_text(d: Definition, lang: str) -> str:
+    fields = {f["key"]: f for f in d.schema["fields"]}
+    lines = []
+    for key in d.added:
+        f = fields[key]
+        label = f["label"].get(lang) or next(iter(f["label"].values()), key)
+        kind = TYPE_NAMES[lang].get(f["type"], f["type"])
+        if f.get("options"):
+            separator = "، " if lang == "fa" else ", "
+            kind += ": " + separator.join(f["options"])
+        lines.append(f"• {label} ({kind})")
+    title = d.title.get(lang) or next(iter(d.title.values()), d.key)
+    template = "data.define_new" if d.collection_id is None else "data.define_add"
+    return t(lang, template, title=title, fields="\n".join(lines))
+
+
+class DefineProposer:
+    """Shows a person a proposed collection with Save/Cancel; the proposal waits in Redis."""
+
+    def __init__(self, runtime: Runtime, bot: BotRecord, user: User) -> None:
+        self._runtime = runtime
+        self._tg_bot_id = bot.tg_bot_id
+        self._tg_user_id = user.tg_user_id
+        self._lang = lang_of(user.language)
+
+    async def __call__(self, d: Definition) -> str:
+        runtime = self._runtime
+        client = runtime.transport.client(self._tg_bot_id)
+        if client is None:
+            return "ERROR: cannot ask the user to confirm right now; try again later."
+        token = secrets.token_urlsafe(9)
+        await runtime.redis.set(f"data-define:{token}", d.to_json(), ex=DEFINE_TTL)
+        lang = self._lang
+        buttons = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=t(lang, "btn.data_save"), callback_data=f"datadef:ok:{token}"
+                    ),
+                    InlineKeyboardButton(
+                        text=t(lang, "btn.data_cancel"), callback_data=f"datadef:no:{token}"
+                    ),
+                ]
+            ]
+        )
+        await runtime.sender.send_text(
+            client, self._tg_user_id, definition_text(d, lang), group=False, buttons=buttons
+        )
+        return (
+            f"The user was shown the proposed collection {d.key!r} with Save and Cancel "
+            "buttons. Tell them in one short sentence to press Save; it does not exist yet."
+        )
+
+
+@router.callback_query(F.data.startswith("datadef:"))
+async def on_define_button(
+    query: CallbackQuery, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
+) -> None:
+    lang = lang_of(query.from_user.language_code)
+    parts = query.data.split(":")
+    if len(parts) != 3 or parts[1] not in ("ok", "no"):
+        await query.answer()
+        return
+    _, action, token = parts
+    key = f"data-define:{token}"
+    raw = await runtime.redis.get(key)
+    d = None
+    if raw is not None:
+        try:
+            d = Definition.from_json(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            await runtime.redis.delete(key)
+    if d is None:
+        await query.answer()
+        await _edit(query, t(lang, "data.define_expired"))
+        return
+    user = await started_user(session, bot_record, query.from_user.id)
+    if (
+        user is None
+        or user.id != d.user_id
+        or d.bot_id != bot_record.id
+        or not can_use(bot_record, query.from_user.id)
+    ):
+        await query.answer(t(lang, "data.not_for_you"), show_alert=True)
+        return
+    lang = lang_of(user.language)
+    await runtime.redis.delete(key)
+    if action == "no":
+        await query.answer()
+        await _edit(query, t(lang, "data.define_cancelled"))
+        return
+    try:
+        c = await apply_definition(session, runtime.pricing, d)
+    except DataError as e:
+        await session.rollback()
+        await query.answer()
+        reason = describe_error(e).removeprefix("ERROR: ")
+        await _edit(query, t(lang, "data.define_failed", reason=reason))
+        return
+    await session.commit()
+    title = c.title.get(lang) or next(iter(c.title.values()), c.key)
+    await query.answer()
+    await _edit(query, t(lang, "data.define_saved", title=title))

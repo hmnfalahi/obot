@@ -63,11 +63,24 @@ class DataTools(Protocol):
         period: str | None = None,
     ) -> str: ...
 
+    async def define(self, collection: str, title: str, fields: list[dict[str, Any]]) -> str: ...
+
 
 class DataFilter(BaseModel):
     field: str
     op: Literal["eq", "ne", "lt", "lte", "gt", "gte", "contains", "in"]
     value: str | bool | int | float | list[str | int | float] | None = None
+
+
+class FieldSpec(BaseModel):
+    key: str  # lowercase latin slug, e.g. "kg"
+    label: str  # in the user's language
+    type: Literal[
+        "text", "number", "money", "date", "time", "datetime", "choice", "boolean", "phone"
+    ]
+    required: bool = False
+    options: list[str] = []  # choice only
+    currency: str | None = None  # money only, e.g. "IRT"
 
 
 @dataclass
@@ -293,11 +306,24 @@ async def data_summarize(
     )
 
 
+async def data_define(
+    ctx: RunContext[ToolServices], collection: str, title: str, fields: list[FieldSpec]
+) -> str:
+    """Propose a new personal collection for this user, or new fields for one of theirs
+    (same key). collection is a lowercase latin key like "weight", title is in their
+    language. They confirm with a Save button; do not ask in words, and add records only
+    after they saved it."""
+    if ctx.deps.data is None:
+        return NO_DATA
+    return await ctx.deps.data.define(collection, title, [f.model_dump() for f in fields])
+
+
 DELEGATION_TOOL = "ask_bots"
 SCHEDULE_TOOL = "schedule_task"
 DATA_TOOLS = ("data_find", "data_add", "data_update", "data_delete", "data_summarize")
 # Toolbox switch (not a tool): users may define their own collections in chat (SPEC 8.8).
 PERSONAL_DATA = "personal_data"
+DEFINE_TOOL = "data_define"
 
 TOOLS = {
     "web_search": Tool(web_search),
@@ -311,6 +337,7 @@ TOOLS = {
     "data_update": Tool(data_update),
     "data_delete": Tool(data_delete),
     "data_summarize": Tool(data_summarize),
+    DEFINE_TOOL: Tool(data_define),
 }
 
 
@@ -321,17 +348,20 @@ def build_tools(
     delegation: bool = False,
     scheduling: bool = False,
     data: bool = False,
+    define: bool = False,
 ) -> list[Tool[ToolServices]]:
     """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped.
 
     The rest are never configured per bot: `apis` (the bot has endpoints of its owner) adds
     call_api, `delegation` (the person has other bots) ask_bot, `scheduling` (a private
-    chat) schedule_task, and `data` (the bot has collections here) the data_* tools.
+    chat) schedule_task, and `data` (the bot has collections here) the data_* tools,
+    `define` (the personal_data switch) data_define.
     """
-    implicit = (DELEGATION_TOOL, SCHEDULE_TOOL, PERSONAL_DATA, *DATA_TOOLS)
+    implicit = (DELEGATION_TOOL, SCHEDULE_TOOL, PERSONAL_DATA, DEFINE_TOOL, *DATA_TOOLS)
     names = [t for t in enabled if t not in implicit]
     names += [API_TOOL] if apis else []
     names += [DELEGATION_TOOL] if delegation else []
     names += [SCHEDULE_TOOL] if scheduling else []
     names += list(DATA_TOOLS) if data else []
+    names += [DEFINE_TOOL] if define else []
     return [TOOLS[name] for name in dict.fromkeys(names) if name in TOOLS]
