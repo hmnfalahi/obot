@@ -150,6 +150,10 @@ const en = {
   'dataError.stale': 'Someone changed this meanwhile; it was reloaded.',
   'dataError.not_allowed': 'You can’t change this.',
   'dataError.other': 'Couldn’t save.',
+  'dataError.failed': 'Couldn’t do that.',
+  'dataError.collection_not_found': 'This list was not found.',
+  'dataError.record_not_found': 'This record no longer exists; the list was reloaded.',
+  'dataError.invalid_query': 'That search or filter doesn’t work for this list.',
 }
 
 type Key = keyof typeof en
@@ -303,9 +307,18 @@ const fa: Record<Key, string> = {
   'dataError.stale': 'یکی هم‌زمان تغییرش داد؛ دوباره بارگذاری شد.',
   'dataError.not_allowed': 'نمی‌تونی این رو تغییر بدی.',
   'dataError.other': 'ذخیره نشد.',
+  'dataError.failed': 'انجام نشد.',
+  'dataError.collection_not_found': 'این فهرست پیدا نشد.',
+  'dataError.record_not_found': 'این رکورد دیگه وجود نداره؛ فهرست دوباره بارگذاری شد.',
+  'dataError.invalid_query': 'این جستجو یا فیلتر برای این فهرست جواب نمی‌ده.',
 }
 
 const catalogs: Record<Lang, Record<Key, string>> = { en, fa }
+
+/** Whether `key` has its own text (unknown keys translate to themselves). */
+export function hasText(key: string): boolean {
+  return key in en
+}
 
 export type Translate = (key: Key | string, params?: Record<string, string | number>) => string
 
@@ -320,12 +333,23 @@ export const I18n = createContext<{ lang: Lang; t: Translate }>({ lang: 'fa', t:
 
 export const useI18n = () => useContext(I18n)
 
+/** Formats with `format`, or gives `raw` back if it is not a valid date. */
+function orRaw(raw: string, format: () => string): string {
+  try {
+    return format()
+  } catch {
+    return raw
+  }
+}
+
 export function formatDateTime(iso: string, lang: Lang, timeZone: string): string {
-  return new Intl.DateTimeFormat(lang === 'fa' ? 'fa-IR' : 'en-GB', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone,
-  }).format(new Date(iso))
+  return orRaw(iso, () =>
+    new Intl.DateTimeFormat(lang === 'fa' ? 'fa-IR' : 'en-GB', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone,
+    }).format(new Date(iso)),
+  )
 }
 
 export function formatNumber(n: number, lang: Lang): string {
@@ -339,15 +363,19 @@ export function titleOf(labels: Record<string, string>, lang: Lang, fallback: st
 
 /** A `YYYY-MM-DD` date; fa shows the Persian (Jalali) calendar. */
 export function formatDate(iso: string, lang: Lang): string {
-  return new Intl.DateTimeFormat(lang === 'fa' ? 'fa-IR' : 'en-GB', {
-    dateStyle: 'medium',
-    timeZone: 'UTC',
-  }).format(new Date(`${iso}T00:00:00Z`))
+  return orRaw(iso, () =>
+    new Intl.DateTimeFormat(lang === 'fa' ? 'fa-IR' : 'en-GB', {
+      dateStyle: 'medium',
+      timeZone: 'UTC',
+    }).format(new Date(`${iso}T00:00:00Z`)),
+  )
 }
 
 /** A UTC datetime ("...Z") as `YYYY-MM-DDTHH:MM` wall time in `timeZone`, for datetime-local. */
 export function localDateTime(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat('sv-SE', { timeZone, dateStyle: 'short', timeStyle: 'short' })
-    .format(new Date(iso))
-    .replace(' ', 'T')
+  return orRaw(iso, () =>
+    new Intl.DateTimeFormat('sv-SE', { timeZone, dateStyle: 'short', timeStyle: 'short' })
+      .format(new Date(iso))
+      .replace(' ', 'T'),
+  )
 }

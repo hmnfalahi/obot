@@ -1,7 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { api, type DataCollection, type DataFilter, type DataRecord, type FieldDef, type Lang } from '../api'
+import { api, dataErrorOf, type DataCollection, type DataFilter, type DataRecord, type FieldDef, type Lang } from '../api'
 import type { Route } from '../App'
-import { formatDate, formatDateTime, formatNumber, localDateTime, titleOf, useI18n, type Translate } from '../i18n'
+import {
+  formatDate,
+  formatDateTime,
+  formatNumber,
+  hasText,
+  localDateTime,
+  titleOf,
+  useI18n,
+  type Translate,
+} from '../i18n'
 import { useLoad } from '../hooks'
 import { ErrorBox, Loading } from '../ui'
 import { RecordForm } from './RecordForm'
@@ -20,7 +29,7 @@ export function CollectionPage(props: { botId: number; collectionId: number; nav
   if (!c) {
     return (
       <div className="card">
-        <p className="hint">{t('noCollections')}</p>
+        <p className="hint">{t('dataError.collection_not_found')}</p>
         <button className="btn secondary" onClick={() => navigate({ page: 'data', botId })}>
           {t('data')}
         </button>
@@ -192,7 +201,9 @@ function CalendarView(props: {
   const withTime = dateField.type === 'datetime'
   const filters: DataFilter[] = [
     { field: dateField.key, op: 'gte', value: withTime ? `${weekStart}T00:00` : weekStart },
-    { field: dateField.key, op: 'lte', value: withTime ? `${weekEnd}T23:59` : weekEnd },
+    withTime
+      ? { field: dateField.key, op: 'lt', value: `${addDays(weekEnd, 1)}T00:00` }
+      : { field: dateField.key, op: 'lte', value: weekEnd },
   ]
   const pages = useRecordPages(botId, c.id, { filters, sort: dateField.key, desc: false })
   const visible = c.fields.filter((f) => !f.hidden)
@@ -279,6 +290,7 @@ type RecordQuery = Omit<Parameters<typeof api.records>[2], 'offset' | 'limit'>
 
 /** Pages of records for `params`; a change of params starts again from the first page. */
 function useRecordPages(botId: number, collectionId: number, params: RecordQuery) {
+  const { t } = useI18n()
   const key = JSON.stringify(params)
   const [loaded, setLoaded] = useState<{ key: string; records: DataRecord[]; hasMore: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -293,12 +305,12 @@ function useRecordPages(botId: number, collectionId: number, params: RecordQuery
         setLoaded({ key, records: page.records, hasMore: page.has_more })
         setError(null)
       },
-      (e: Error) => live && setError(e.message),
+      (e: Error) => live && setError(explain(e, t)),
     )
     return () => {
       live = false
     }
-  }, [botId, collectionId, key, nonce])
+  }, [botId, collectionId, key, nonce, t])
 
   const current = loaded?.key === key ? loaded : null
   const loadMore = () => {
@@ -309,9 +321,9 @@ function useRecordPages(botId: number, collectionId: number, params: RecordQuery
       .then(
         (page) =>
           setLoaded((s) =>
-            s?.key === key ? { key, records: [...s.records, ...page.records], hasMore: page.has_more } : s,
+            s?.key === key ? { key, records: appendNew(s.records, page.records), hasMore: page.has_more } : s,
           ),
-        (e: Error) => setError(e.message),
+        (e: Error) => setError(explain(e, t)),
       )
       .finally(() => setBusy(false))
   }
@@ -327,6 +339,18 @@ function useRecordPages(botId: number, collectionId: number, params: RecordQuery
       setNonce((n) => n + 1)
     },
   }
+}
+
+/** Records shift while paging (a record added meanwhile); keep each one once. */
+function appendNew(records: DataRecord[], more: DataRecord[]): DataRecord[] {
+  const seen = new Set(records.map((r) => r.id))
+  return [...records, ...more.filter((r) => !seen.has(r.id))]
+}
+
+/** A data error in the user's language, else the server's message. */
+function explain(e: Error, t: Translate): string {
+  const code = dataErrorOf(e)?.code
+  return code && hasText(`dataError.${code}`) ? t(`dataError.${code}`) : e.message
 }
 
 function isEmpty(v: unknown): boolean {
