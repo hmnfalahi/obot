@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     embedding_model: str = "baai/bge-m3"
     memory_extract_interval_seconds: int = 300
     message_retention_days: int = 30
+    # Deleted data records stay restorable this long, then are purged
+    deleted_record_retention_days: int = 30
 
     plans_file: Path = Path("plans.yaml")
     # Designer (LLM) messages a user may send to the factory bot per day

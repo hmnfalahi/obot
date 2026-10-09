@@ -22,6 +22,12 @@ class Plan(BaseModel):
     knowledge_bytes: int
     max_api_endpoints: int
     max_chain_steps: int
+    # Structured data (SPEC 8.8). Collections: per bot for the template (owner's plan) and per
+    # person per bot for the personal ones they make in chat. Records: per bot, a person's
+    # personal records; shared and group records count against the owner's plan.
+    max_data_collections: int
+    max_data_records: int
+    max_record_bytes: int
 
 
 class StarPackage(BaseModel):
