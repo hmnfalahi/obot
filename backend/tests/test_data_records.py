@@ -227,3 +227,21 @@ async def test_concurrent_bookings_of_one_slot(data_world) -> None:
 
     results = await asyncio.gather(book(alice, "Alice"), book(bob, "Bob"))
     assert sorted(results) == ["duplicate", "ok"]
+
+
+async def test_purge_job_commits(data_world) -> None:
+    from obot.data.jobs import purge_records
+
+    w = data_world
+    c = await collection(w, "expenses", CollectionScope.PERSONAL, EXPENSES)
+    alice = await w.space(w.alice)
+    r = await add_record(w.session, w.pricing, alice, c, {"amount": 1})
+    await delete_record(w.session, alice, c, r.id)
+    old = datetime.now(UTC) - timedelta(days=31)
+    await w.session.execute(update(Record).where(Record.id == r.id).values(deleted_at=old))
+    await w.session.commit()
+
+    await purge_records(async_sessionmaker(w.session.bind, expire_on_commit=False), 30)
+
+    w.session.expunge_all()
+    assert await w.session.get(Record, r.id) is None

@@ -31,6 +31,7 @@ cd deploy && docker compose up -d --build          # production stack
 ## Rules
 
 - Chat memory and message history are always scoped by `(bot_id, tg_chat_id)`. Never query them without both — enforce it in the repository layer.
+- Bot data records are read and written only through `obot.data` with a `DataSpace` (who is asking, on which bot, in which chat). Never query `Record` or `RecordKey` elsewhere.
 - Plan limits and model credit rates come from config, never hard-coded.
 - Bot tokens and BYOK keys are encrypted at rest.
 - All outgoing Telegram messages go through the single send layer (rate limiting, retries).

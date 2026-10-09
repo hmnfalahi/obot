@@ -22,6 +22,7 @@ from obot.core.fetch import make_client
 from obot.core.llm import ModelRegistry
 from obot.core.memory import Embedder
 from obot.crypto import TokenCipher
+from obot.data.jobs import purge_records
 from obot.db.session import create_engine, create_sessionmaker
 from obot.jobs import run_every
 from obot.memory.jobs import extract_pending, purge_history
@@ -189,6 +190,13 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
                 "history-retention",
                 6 * 3600,
                 lambda: purge_history(runtime.sessionmaker, settings.message_retention_days),
+            )
+        ),
+        asyncio.create_task(
+            run_every(
+                "data-retention",
+                6 * 3600,
+                lambda: purge_records(runtime.sessionmaker, settings.deleted_record_retention_days),
             )
         ),
     ]
