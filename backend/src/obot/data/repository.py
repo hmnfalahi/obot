@@ -347,6 +347,7 @@ async def update_record(
     values = validate_record(schema, changes, tz, current=record.data)
     check_allowed_hours(schema, values, tz)
     _check_size(pricing, space, c, values)
+    changed = values != record.data
     async with session.begin_nested():
         await session.execute(delete(RecordKey).where(RecordKey.record_id == record.id))
         record.data = values
@@ -354,6 +355,8 @@ async def update_record(
         record.schema_version = c.schema_version
         await session.flush()
         await _claim_keys(session, c, record, schema)
+    if not changed:
+        return record  # nobody is told about an edit that changed nothing
     await on_record_change(
         session,
         c,
