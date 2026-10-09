@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from aiogram import Bot
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from sqlalchemy.exc import DBAPIError
 
 from obot.api import data_routes
 from obot.api.deps import ApiState
@@ -59,6 +61,8 @@ def create_app(state: ApiState | None = None, lifespan=None) -> FastAPI:
 
     app.include_router(router)
     app.include_router(data_routes.router)
+    app.add_exception_handler(RequestValidationError, data_routes.validation_error)
+    app.add_exception_handler(DBAPIError, data_routes.database_error)
     return app
 
 
