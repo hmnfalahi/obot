@@ -12,6 +12,7 @@ import {
   type Translate,
 } from '../i18n'
 import { useLoad } from '../hooks'
+import { downloadFile } from '../telegram'
 import { ErrorBox, Loading } from '../ui'
 import { RecordForm } from './RecordForm'
 
@@ -36,10 +37,11 @@ export function CollectionPage(props: { botId: number; collectionId: number; nav
       </div>
     )
   }
-  return <CollectionView key={c.id} botId={botId} c={c} />
+  return <CollectionView key={c.id} botId={botId} c={c} navigate={navigate} />
 }
 
-function CollectionView({ botId, c }: { botId: number; c: DataCollection }) {
+function CollectionView(props: { botId: number; c: DataCollection; navigate: (r: Route) => void }) {
+  const { botId, c, navigate } = props
   const { t, lang } = useI18n()
   const visible = c.fields.filter((f) => !f.hidden)
   const dateField = visible.find((f) => f.type === 'date' || f.type === 'datetime')
@@ -48,6 +50,7 @@ function CollectionView({ botId, c }: { botId: number; c: DataCollection }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [query, setQuery] = useState<TableQuery>({ q: '', sort: '', desc: true })
   const [weekStart, setWeekStart] = useState(() => weekStartOf(todayIn(c.timezone), lang))
+  const [exporting, setExporting] = useState(false)
 
   const open = (record: DataRecord | 'new') => {
     setNotice(null)
@@ -56,6 +59,18 @@ function CollectionView({ botId, c }: { botId: number; c: DataCollection }) {
   const close = (message?: string) => {
     setNotice(message ?? null)
     setEditing(null)
+  }
+  const exportCsv = async () => {
+    setExporting(true)
+    setNotice(null)
+    try {
+      const link = await api.exportLink(botId, c.id)
+      downloadFile(window.location.origin + link.url, link.file_name)
+    } catch (e) {
+      setNotice(explain(e as Error, t))
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -79,6 +94,19 @@ function CollectionView({ botId, c }: { botId: number; c: DataCollection }) {
         />
       ) : (
         <>
+          <div className="row" style={{ marginBottom: 8 }}>
+            {c.can_edit && (
+              <button
+                className="btn secondary"
+                onClick={() => navigate({ page: 'schema', botId, collectionId: c.id })}
+              >
+                {t('editList')}
+              </button>
+            )}
+            <button className="btn secondary" disabled={exporting} onClick={exportCsv}>
+              {t('exportCsv')}
+            </button>
+          </div>
           {notice && <p className="error card">{notice}</p>}
           {dateField && (
             <div className="tabs">

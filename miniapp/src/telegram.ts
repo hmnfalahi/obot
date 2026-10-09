@@ -18,6 +18,7 @@ interface WebApp {
   openInvoice(url: string, callback?: (status: 'paid' | 'cancelled' | 'failed' | 'pending') => void): void
   showAlert(message: string): void
   showConfirm(message: string, callback: (ok: boolean) => void): void
+  downloadFile?(params: { url: string; file_name: string }, callback?: (accepted: boolean) => void): void
   BackButton: BackButton
   HapticFeedback?: { notificationOccurred(type: 'success' | 'error' | 'warning'): void }
 }
@@ -64,4 +65,10 @@ export function openInvoice(url: string): Promise<string> {
       resolve('pending')
     }
   })
+}
+
+/** Telegram's download sheet for a file at `url`; a new browser tab outside Telegram. */
+export function downloadFile(url: string, fileName: string): void {
+  if (webApp?.initData && webApp.downloadFile) webApp.downloadFile({ url, file_name: fileName })
+  else window.open(url, '_blank')
 }
