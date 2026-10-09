@@ -1,5 +1,5 @@
-"""The data_* tools' access to one bot's collections on behalf of one person, in a private
-context: their chat with the bot, their task, or another bot's question for them.
+"""The data_* tools' access to one bot's collections on behalf of one person: in their
+private chat, their task, another bot's question for them, or a group they wrote in.
 
 Each call opens its own session and commits writes at once, so no row locks or unique keys
 are held while the model is thinking, and a booking is saved even if the reply fails later.
@@ -28,6 +28,7 @@ from obot.data.errors import (
 from obot.data.format import (
     describe_collections,
     describe_error,
+    describe_group_only,
     format_records,
     format_summary,
     format_taken,
@@ -43,6 +44,7 @@ from obot.data.repository import (
     get_record,
     list_collections,
     lock_collection,
+    template_collections,
     update_collection_schema,
     update_record,
 )
@@ -53,6 +55,17 @@ from obot.i18n import lang_of
 
 NoticeShared = Callable[[], Awaitable[None]]
 ConfirmDelete = Callable[[Collection, Record], Awaitable[str]]
+GroupAdmin = Callable[[], Awaitable[bool]]
+
+
+@dataclass(frozen=True)
+class GroupChat:
+    """The group a request comes from: the data tools then work on that group's records
+    only (SPEC 8.8). `is_admin` is asked only when an edit or delete needs it."""
+
+    tg_chat_id: int
+    is_admin: GroupAdmin
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -199,6 +212,7 @@ class DataService:
         notice_shared: NoticeShared | None = None,
         confirm_delete: ConfirmDelete | None = None,
         propose_define: ProposeDefine | None = None,
+        group: GroupChat | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._pricing = pricing
@@ -207,13 +221,25 @@ class DataService:
         self._notice_shared = notice_shared
         self._confirm_delete = confirm_delete
         self._propose_define = propose_define
+        self._group = group
 
-    async def _space(self, session: AsyncSession, key: str = "") -> DataSpace:
+    async def _space(
+        self, session: AsyncSession, key: str = "", *, admin: bool = False
+    ) -> DataSpace:
+        """The caller's space; in a group, the group's. `admin`: ask whether the caller
+        manages the group (only edits and deletes need it)."""
         bot = await session.get(Bot, self._bot_id)
         user = await session.get(User, self._user_id)
         if bot is None or user is None:
             raise CollectionNotFound(key)
-        return await space_for(session, bot, user)
+        group = self._group
+        return await space_for(
+            session,
+            bot,
+            user,
+            tg_chat_id=group.tg_chat_id if group else None,
+            is_group_admin=bool(group and admin and await group.is_admin()),
+        )
 
     async def note(
         self, session: AsyncSession, now: datetime | None = None, *, can_define: bool = False
@@ -234,13 +260,26 @@ class DataService:
             log.exception("data catalog failed")
             return None
 
-    async def _run(self, key: str, action, *, write: bool = False) -> str:
+    async def group_hint(self, session: AsyncSession) -> str | None:
+        """In a private chat: names the bot's group collections, which work only in its
+        groups. None in a group, without any, or when they cannot be read."""
+        if self._group is not None:
+            return None
+        try:
+            async with session.begin_nested():
+                collections = await template_collections(session, self._bot_id)
+        except Exception:
+            log.exception("group collections could not be listed")
+            return None
+        return describe_group_only([c for c in collections if c.scope == CollectionScope.GROUP])
+
+    async def _run(self, key: str, action, *, write: bool = False, admin: bool = False) -> str:
         """Run `action(session, space, c)`, which returns text, or (text, after) where `after`
         is an async callable run once the session is closed and writes are committed. A failing
         `after` is logged and never changes the result."""
         try:
             async with self._sessionmaker() as session:
-                space = await self._space(session, key)
+                space = await self._space(session, key, admin=admin)
                 c = await get_collection(session, space, str(key).strip())
                 result = await action(session, space, c)
                 if write:
@@ -311,7 +350,7 @@ class DataService:
             record = await update_record(session, self._pricing, space, c, record_id, changes)
             return f"OK: #{record.id} is now {_visible_data(c, record)}"
 
-        return await self._run(collection, action, write=True)
+        return await self._run(collection, action, write=True, admin=True)
 
     async def delete(self, collection: str, record_id: int) -> str:
         if self._confirm_delete is None:
@@ -330,7 +369,7 @@ class DataService:
 
             return "", after
 
-        return await self._run(collection, action)
+        return await self._run(collection, action, admin=True)
 
     async def summarize(
         self,
@@ -420,6 +459,8 @@ class DataService:
         """Propose a personal collection (or new fields for one of the person's own); nothing
         changes until they press Save (apply_definition)."""
         if self._propose_define is None:
+            return "ERROR: new collections need the user's confirmation in their private chat."
+        if self._group is not None:
             return "ERROR: new collections need the user's confirmation in their private chat."
         try:
             async with self._sessionmaker() as session:
