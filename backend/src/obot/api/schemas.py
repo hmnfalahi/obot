@@ -92,11 +92,6 @@ class TaskOut(BaseModel):
     steps: list[StepOut]
 
 
-class AvatarIn(BaseModel):
-    # The image file, base64-encoded (at most 10 MB before encoding).
-    image: str = Field(min_length=1, max_length=14_000_000)
-
-
 class WalletKeyOut(BaseModel):
     provider: Provider
     key_hint: str

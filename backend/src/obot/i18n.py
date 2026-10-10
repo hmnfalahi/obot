@@ -99,17 +99,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "To use me, start me in private first.",
         "task.draft": "⏰ New task: {summary}\nNext run: {when}\nSends to: {where}",
         "task.to_me": "you, here",
-        "avatar.offer": "Want a profile photo for @{username}?",
-        "btn.avatar_upload": "📷 Upload a photo",
-        "btn.later": "Later",
-        "avatar.choose_bot": "Which bot gets a new photo?",
-        "avatar.send_photo": (
-            "Send the photo for @{username}. I'll crop it to a square. (Any time later you can "
-            "also send a photo captioned @{username}.)"
-        ),
-        "avatar.invalid": "That isn't an image I can use. Please send a photo.",
-        "avatar.done": "✅ @{username} has its new photo.",
-        "avatar.failed": "Telegram did not accept the photo for @{username}. Try another one.",
         "bot.settings": "Your own key, model and daily limit for me are in your Obot panel.",
         "btn.my_settings": "Open my settings",
         "factory.my_settings": "Your settings for that bot:",
@@ -329,17 +318,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "برای استفاده از من، اول توی پیوی استارتم کن.",
         "task.draft": "⏰ کار جدید: {summary}\nاجرای بعدی: {when}\nارسال به: {where}",
         "task.to_me": "خودت، همین‌جا",
-        "avatar.offer": "برای @{username} عکس پروفایل می‌خوای؟",
-        "btn.avatar_upload": "📷 آپلود عکس",
-        "btn.later": "بعداً",
-        "avatar.choose_bot": "عکس جدید برای کدوم ربات؟",
-        "avatar.send_photo": (
-            "عکس @{username} رو بفرست؛ مربعش می‌کنم. (بعداً هم هر وقت خواستی می‌تونی عکسی با "
-            "کپشن @{username} بفرستی.)"
-        ),
-        "avatar.invalid": "این عکسی نیست که بتونم استفاده کنم. لطفاً یه عکس بفرست.",
-        "avatar.done": "✅ عکس جدید @{username} گذاشته شد.",
-        "avatar.failed": "تلگرام عکس @{username} رو قبول نکرد. یه عکس دیگه امتحان کن.",
         "bot.settings": "کلید و مدل خودت و سقف مصرف روزانه‌ات برای من توی پنل Obot هست.",
         "btn.my_settings": "باز کردن تنظیماتم",
         "factory.my_settings": "تنظیمات تو برای اون ربات:",
