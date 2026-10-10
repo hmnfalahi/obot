@@ -7,7 +7,7 @@ bot can tell the user what went wrong instead of failing the whole reply.
 
 import logging
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 import feedparser
@@ -16,7 +16,6 @@ import trafilatura
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext, Tool
 
-from obot.core.custom_api import API_TOOL, Endpoint, MissingKeys, request
 from obot.core.fetch import FetchError, FetchResult, fetch, truncate
 
 log = logging.getLogger(__name__)
@@ -92,12 +91,6 @@ class ToolServices:
     delegate: Callable[[str, str], Awaitable[str]] | None = None
     # Drafts a scheduled task for the person (request) -> outcome; see schedule_task.
     schedule: Callable[[str], Awaitable[str]] | None = None
-    # The bot's endpoints for call_api, by name; see obot.core.custom_api.
-    apis: dict[str, Endpoint] = field(default_factory=dict)
-    # The person's own values for the endpoints' key slots (never shown to the model).
-    api_keys: dict[str, str] = field(default_factory=dict, repr=False)
-    # Asks the person to set missing keys (names) -> what to tell them; see call_api.
-    ask_for_keys: Callable[[list[str]], Awaitable[str]] | None = None
     # The bot's collections (data_* tools); None where data is not available (groups).
     data: DataTools | None = None
 
@@ -205,39 +198,6 @@ async def schedule_task(ctx: RunContext[ToolServices], request: str) -> str:
     return await ctx.deps.schedule(request)
 
 
-async def call_api(
-    ctx: RunContext[ToolServices],
-    name: str,
-    path_params: dict[str, str] | None = None,
-    query: dict[str, str] | None = None,
-    body: dict[str, Any] | list[Any] | None = None,
-) -> str:
-    """Call one of the APIs by name (see the list in your instructions).
-
-    path_params fills the {placeholders} of its address, query adds URL parameters,
-    body is JSON sent with POST, PUT and PATCH.
-    """
-    services = ctx.deps
-    endpoint = services.apis.get(name.strip())
-    if endpoint is None:
-        return f"ERROR: there is no API named '{name}'."
-    if refusal := await services.meter.before("api"):
-        return f"ERROR: {refusal}"
-    try:
-        text = await request(
-            services.http, endpoint, path_params or {}, query or {}, body, services.api_keys
-        )
-    except MissingKeys as e:
-        if services.ask_for_keys is not None:
-            return await services.ask_for_keys(e.names)
-        return f"ERROR: the user has not set their {', '.join(e.names)} for this bot yet."
-    except FetchError as e:
-        log.info("call_api %s failed: %s", endpoint.name, e)
-        return f"ERROR: calling {endpoint.name} failed: {e}."
-    await services.meter.after("api")
-    return text
-
-
 NO_DATA = "ERROR: data is not available here; the user can use it in a private chat."
 
 
@@ -331,7 +291,6 @@ TOOLS = {
     "rss": Tool(read_rss),
     DELEGATION_TOOL: Tool(ask_bot),
     SCHEDULE_TOOL: Tool(schedule_task),
-    API_TOOL: Tool(call_api),
     "data_find": Tool(data_find),
     "data_add": Tool(data_add),
     "data_update": Tool(data_update),
@@ -344,7 +303,6 @@ TOOLS = {
 def build_tools(
     enabled: Iterable[str],
     *,
-    apis: bool = False,
     delegation: bool = False,
     scheduling: bool = False,
     data: bool = False,
@@ -352,14 +310,12 @@ def build_tools(
 ) -> list[Tool[ToolServices]]:
     """Tools for a bot's configured tool names; unknown names (e.g. future tools) are skipped.
 
-    The rest are never configured per bot: `apis` (the bot has endpoints of its owner) adds
-    call_api, `delegation` (the person has other bots) ask_bot, `scheduling` (a private
-    chat) schedule_task, and `data` (the bot has collections here) the data_* tools,
-    `define` (the personal_data switch) data_define.
+    The rest are never configured per bot: `delegation` (the person has other bots) adds
+    ask_bot, `scheduling` (a private chat) schedule_task, `data` (the bot has collections
+    here) the data_* tools, and `define` (the personal_data switch) data_define.
     """
     implicit = (DELEGATION_TOOL, SCHEDULE_TOOL, PERSONAL_DATA, DEFINE_TOOL, *DATA_TOOLS)
     names = [t for t in enabled if t not in implicit]
-    names += [API_TOOL] if apis else []
     names += [DELEGATION_TOOL] if delegation else []
     names += [SCHEDULE_TOOL] if scheduling else []
     names += list(DATA_TOOLS) if data else []

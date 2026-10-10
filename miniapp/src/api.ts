@@ -18,7 +18,6 @@ export interface Me {
   credit_balance: number
   max_bots: number
   max_tasks: number
-  max_apis: number
   messages_today: Quota
   searches_today: Quota
   factory_username: string
@@ -101,36 +100,12 @@ export interface MySettings {
   model: string | null
   daily_credit_cap: number | null
   wallet: Provider[]
-  api_keys: { name: string; is_set: boolean }[]
 }
 
 export interface MySettingsIn {
   key_provider: Provider | null
   model: string | null
   daily_credit_cap: number | null
-}
-
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-export const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-
-export interface ApiEndpoint {
-  id: number
-  name: string
-  description: string
-  method: HttpMethod
-  url: string
-  /** Templates, not secret: {name} slots take each user's own key. */
-  headers: Record<string, string>
-  key_slots: string[]
-}
-
-export interface ApiIn {
-  name: string
-  description: string
-  method: HttpMethod
-  url: string
-  /** Values may name key slots like "Bearer {shop_token}"; never a real key. */
-  headers: Record<string, string>
 }
 
 export type Visibility = 'private' | 'public'
@@ -156,7 +131,6 @@ export interface BotDetail extends BotSummary {
   language: string
   model_tier: string
   recommended_model: string | null
-  apis: ApiEndpoint[]
   daily_credit_cap: number | null
   chats: Chat[]
 }
@@ -335,13 +309,6 @@ export const api = {
   deleteKey: (provider: Provider) => request<WalletKey[]>('DELETE', `/keys/${provider}`),
   mine: (botId: number) => request<MySettings>('GET', `/bots/${botId}/mine`),
   putMine: (botId: number, body: MySettingsIn) => request<MySettings>('PUT', `/bots/${botId}/mine`, body),
-  putApiKey: (botId: number, name: string, value: string) =>
-    request<MySettings>('PUT', `/bots/${botId}/mine/keys/${name}`, { value }),
-  deleteApiKey: (botId: number, name: string) =>
-    request<MySettings>('DELETE', `/bots/${botId}/mine/keys/${name}`),
-  addApi: (botId: number, body: ApiIn) => request<BotDetail>('POST', `/bots/${botId}/apis`, body),
-  updateApi: (id: number, body: ApiIn) => request<BotDetail>('PUT', `/apis/${id}`, body),
-  deleteApi: (id: number) => request<BotDetail>('DELETE', `/apis/${id}`),
   usage: (id: number, days = 7) => request<UsageDay[]>('GET', `/bots/${id}/usage?days=${days}`),
   tasks: () => request<Task[]>('GET', '/tasks'),
   pauseTask: (id: number, paused: boolean) => request<Task>('PATCH', `/tasks/${id}`, { paused }),

@@ -1,11 +1,8 @@
 import { useState } from 'react'
 import {
   api,
-  METHODS,
   TOOLS,
-  type ApiEndpoint,
   type BotDetail,
-  type HttpMethod,
   type Me,
   type ToolName,
 } from '../api'
@@ -47,7 +44,6 @@ export function BotPage({ id, me, navigate }: { id: number; me: Me; navigate: (r
       <ProfileForm bot={data} onSaved={bot.set} />
       <Avatar bot={data} />
       <Access bot={data} me={me} onSaved={bot.set} />
-      <Apis bot={data} me={me} onSaved={bot.set} />
       <Chats bot={data} />
       <Usage id={id} />
     </>
@@ -248,177 +244,6 @@ function ProfileForm({ bot, onSaved }: { bot: BotDetail; onSaved: (b: BotDetail)
         {status === 'saved' ? t('saved') : t('save')}
       </button>
       {!['idle', 'saving', 'saved'].includes(status) && <p className="error">{status}</p>}
-    </div>
-  )
-}
-
-function Apis({ bot, me, onSaved }: { bot: BotDetail; me: Me; onSaved: (b: BotDetail) => void }) {
-  const { t } = useI18n()
-  // null: no form open; 'new': adding; a number: editing that API
-  const [open, setOpen] = useState<number | 'new' | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const atLimit = bot.apis.length >= me.max_apis
-
-  const remove = async (id: number) => {
-    setError(null)
-    try {
-      onSaved(await api.deleteApi(id))
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
-
-  return (
-    <>
-      <h2>{t('apis')}</h2>
-      <div className="card">
-        <p className="hint">{t('apisHint')}</p>
-      </div>
-      {bot.apis.map((item) =>
-        open === item.id ? (
-          <ApiForm key={item.id} bot={bot} item={item} onDone={(b) => { if (b) onSaved(b); setOpen(null) }} />
-        ) : (
-          <div key={item.id} className="card">
-            <div className="row between">
-              <strong dir="ltr">{item.name}</strong>
-              <span className="badge">{item.method}</span>
-            </div>
-            <div className="hint" dir="ltr" style={{ wordBreak: 'break-all' }}>{item.url}</div>
-            <div className="hint">{item.description}</div>
-            {Object.entries(item.headers).map(([key, value]) => (
-              <div key={key} className="hint" dir="ltr">
-                {key}: {value}
-              </div>
-            ))}
-            {item.key_slots.length > 0 && (
-              <div className="hint">{t('apiKeySlots', { names: item.key_slots.join(', ') })}</div>
-            )}
-            <div className="row" style={{ marginTop: 8 }}>
-              <button className="btn secondary" onClick={() => setOpen(item.id)}>{t('edit')}</button>
-              <button className="btn danger" onClick={() => remove(item.id)}>{t('delete')}</button>
-            </div>
-          </div>
-        ),
-      )}
-      {open === 'new' ? (
-        <ApiForm bot={bot} item={null} onDone={(b) => { if (b) onSaved(b); setOpen(null) }} />
-      ) : (
-        <div className="card">
-          {atLimit ? (
-            <p className="hint">{t('apiLimit', { limit: me.max_apis })}</p>
-          ) : (
-            <button className="btn secondary block" onClick={() => setOpen('new')}>{t('addApi')}</button>
-          )}
-          {error && <p className="error">{error}</p>}
-        </div>
-      )}
-    </>
-  )
-}
-
-function ApiForm({
-  bot,
-  item,
-  onDone,
-}: {
-  bot: BotDetail
-  item: ApiEndpoint | null
-  onDone: (saved: BotDetail | null) => void
-}) {
-  const { t } = useI18n()
-  const [form, setForm] = useState({
-    name: item?.name ?? '',
-    description: item?.description ?? '',
-    method: item?.method ?? ('GET' as HttpMethod),
-    url: item?.url ?? '',
-  })
-  const [headers, setHeaders] = useState<{ key: string; value: string }[]>(
-    item ? Object.entries(item.headers).map(([key, value]) => ({ key, value })) : [],
-  )
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const setHeader = (i: number, field: 'key' | 'value', value: string) =>
-    setHeaders((hs) => hs.map((h, j) => (j === i ? { ...h, [field]: value } : h)))
-
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    const body = {
-      ...form,
-      headers: Object.fromEntries(headers.filter((h) => h.key.trim()).map((h) => [h.key.trim(), h.value])),
-    }
-    try {
-      onDone(await (item ? api.updateApi(item.id, body) : api.addApi(bot.id, body)))
-      haptic('success')
-    } catch (e) {
-      setError((e as Error).message)
-      haptic('error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="card">
-      <label>{t('apiName')}</label>
-      <input
-        dir="ltr"
-        value={form.name}
-        maxLength={40}
-        autoCapitalize="off"
-        spellCheck={false}
-        onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase() })}
-      />
-      <label>{t('apiDescription')}</label>
-      <input value={form.description} maxLength={500} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-      <label>{t('apiMethod')}</label>
-      <select value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value as HttpMethod })}>
-        {METHODS.map((m) => (
-          <option key={m} value={m}>{m}</option>
-        ))}
-      </select>
-      <label>{t('apiUrl')}</label>
-      <input
-        dir="ltr"
-        value={form.url}
-        maxLength={2048}
-        autoCapitalize="off"
-        spellCheck={false}
-        placeholder="https://"
-        onChange={(e) => setForm({ ...form, url: e.target.value })}
-      />
-      <label>{t('apiHeaders')}</label>
-      <p className="hint">{t('apiHeadersHint')}</p>
-      {headers.map((h, i) => (
-        <div key={i} className="row">
-          <input dir="ltr" placeholder={t('apiHeaderName')} value={h.key} onChange={(e) => setHeader(i, 'key', e.target.value)} />
-          <input
-            dir="ltr"
-            placeholder="Bearer {shop_token}"
-            autoCapitalize="off"
-            spellCheck={false}
-            value={h.value}
-            onChange={(e) => setHeader(i, 'value', e.target.value)}
-          />
-        </div>
-      ))}
-      <button className="btn secondary" onClick={() => setHeaders([...headers, { key: '', value: '' }])}>
-        {t('apiAddHeader')}
-      </button>
-      <div className="row" style={{ marginTop: 8 }}>
-        <button
-          className="btn"
-          disabled={busy || !form.name.trim() || !form.description.trim() || !form.url.trim()}
-          onClick={save}
-        >
-          {t('save')}
-        </button>
-        <button className="btn secondary" disabled={busy} onClick={() => onDone(null)}>
-          {t('cancel')}
-        </button>
-      </div>
-      {error && <p className="error">{error}</p>}
     </div>
   )
 }

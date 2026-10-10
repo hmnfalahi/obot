@@ -18,7 +18,6 @@ tools:
   search: 0.008   # Tavily basic search (1 API credit)
   fetch: 0        # our own bandwidth; recorded for statistics
   memory: 0       # priced per model call via `models`
-  api: 0          # owner-defined endpoints (call_api); recorded for statistics
 
 # Credit packages sold for Telegram Stars (XTR). One Star earns the developer about
 # 0.013 USD, i.e. about 130 credits; larger packages include a bonus.
@@ -37,7 +36,6 @@ plans:
     min_task_interval_minutes: 60
     daily_web_searches: 10
     knowledge_bytes: 1048576
-    max_api_endpoints: 3     # per bot
     max_chain_steps: 5
     max_data_collections: 5  # per bot (template) and per person per bot (made in chat)
     max_data_records: 1000   # per bot: a person's personal records / all shared+group records
@@ -51,7 +49,6 @@ plans:
     min_task_interval_minutes: 5
     daily_web_searches: 200
     knowledge_bytes: 52428800
-    max_api_endpoints: 20
     max_chain_steps: 5
     max_data_collections: 30
     max_data_records: 50000

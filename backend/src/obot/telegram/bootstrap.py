@@ -28,7 +28,6 @@ from obot.jobs import run_every
 from obot.memory.jobs import extract_pending, purge_history
 from obot.observability import setup_tracing
 from obot.telegram import (
-    api_keys,
     avatars,
     bots,
     data_chat,
@@ -140,8 +139,6 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
 
     runtime.bots_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
     runtime.bots_dispatcher.update.middleware(ManagedBotMiddleware())
-    # First: a key someone sends must never reach the chat handler (or the model).
-    runtime.bots_dispatcher.include_router(api_keys.router)
     # Before bots: /tasks must not reach the catch-all chat handler.
     runtime.bots_dispatcher.include_router(scheduling.router)
     runtime.bots_dispatcher.include_router(data_chat.router)

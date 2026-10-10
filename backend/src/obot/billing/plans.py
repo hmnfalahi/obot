@@ -20,7 +20,6 @@ class Plan(BaseModel):
     min_task_interval_minutes: int
     daily_web_searches: int
     knowledge_bytes: int
-    max_api_endpoints: int
     max_chain_steps: int
     # Structured data (SPEC 8.8). Collections: per bot for the template (owner's plan) and per
     # person per bot for the personal ones they make in chat. Records: per bot, a person's
