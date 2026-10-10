@@ -28,7 +28,6 @@ from obot.jobs import run_every
 from obot.memory.jobs import extract_pending, purge_history
 from obot.observability import setup_tracing
 from obot.telegram import (
-    avatars,
     bots,
     data_chat,
     factory,
@@ -148,8 +147,6 @@ async def start_services(settings: Settings, mode: Mode) -> Services:
     factory_dispatcher.update.outer_middleware(SessionMiddleware(runtime))
     # Moderation first: /report and admin commands must not reach the designer.
     factory_dispatcher.include_router(moderation.router)
-    # Before payments: its photo handler takes card-to-card receipts.
-    factory_dispatcher.include_router(avatars.router)
     factory_dispatcher.include_router(payments.router)
     factory_dispatcher.include_router(factory.router)
 

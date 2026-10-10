@@ -62,7 +62,6 @@ from obot.factory.drafts import (
 from obot.factory.links import create_link
 from obot.i18n import lang_of, t
 from obot.notices import count_today
-from obot.telegram.avatars import offer_keyboard
 from obot.telegram.profile import sync_profile
 from obot.telegram.runtime import Runtime
 
@@ -548,11 +547,6 @@ async def on_managed_bot(
         await bot.send_message(
             update.user.id, _data_problems(lang, problems), parse_mode=ParseMode.HTML
         )
-    await bot.send_message(
-        update.user.id,
-        t(lang, "avatar.offer", username=username),
-        reply_markup=offer_keyboard(lang, result.bot.id),
-    )
     # A managed bot cannot message its owner until they press Start (see docs/spikes);
     # when it should tell them about new records, say so.
     hint = (

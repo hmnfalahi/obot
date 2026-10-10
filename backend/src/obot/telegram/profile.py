@@ -3,7 +3,6 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
-from aiogram.types import BufferedInputFile, InputProfilePhotoStatic
 
 from obot.factory.designer import BotDraft
 
@@ -42,17 +41,3 @@ async def sync_profile(
         log.warning("could not update profile of bot %s", bot.id, exc_info=True)
     finally:
         await bot.session.close()
-
-
-async def set_avatar(token: str, jpeg: bytes) -> bool:
-    """Set the bot's profile photo (setMyProfilePhoto). False (logged) if Telegram refused."""
-    bot = Bot(token)
-    try:
-        photo = InputProfilePhotoStatic(photo=BufferedInputFile(jpeg, filename="avatar.jpg"))
-        await bot.set_my_profile_photo(photo=photo)
-    except TelegramAPIError:
-        log.warning("could not set the photo of bot %s", bot.id, exc_info=True)
-        return False
-    finally:
-        await bot.session.close()
-    return True
