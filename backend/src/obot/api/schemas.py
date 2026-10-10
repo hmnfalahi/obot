@@ -21,7 +21,6 @@ class MeOut(BaseModel):
     credit_balance: int
     max_bots: int
     max_tasks: int
-    max_apis: int
     messages_today: Quota
     searches_today: Quota
     # For t.me links that continue in the factory chat.
@@ -107,15 +106,6 @@ class WalletKeyIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=512)
 
 
-class ApiKeyStatus(BaseModel):
-    name: str
-    is_set: bool
-
-
-class ApiKeyIn(BaseModel):
-    value: str = Field(min_length=1, max_length=2000)
-
-
 class MySettingsOut(BaseModel):
     """One person's own settings for a bot they use (SPEC 8.7)."""
 
@@ -130,8 +120,6 @@ class MySettingsOut(BaseModel):
     model: str | None
     daily_credit_cap: int | None
     wallet: list[Provider]
-    # Keys the bot's APIs need from each user, and whether this user set them.
-    api_keys: list[ApiKeyStatus]
 
 
 class MySettingsIn(BaseModel):
@@ -141,32 +129,11 @@ class MySettingsIn(BaseModel):
     daily_credit_cap: int | None = Field(default=None, ge=0)
 
 
-class ApiOut(BaseModel):
-    id: int
-    name: str
-    description: str
-    method: str
-    url: str
-    # Templates, not secret: {name} slots take each user's own key.
-    headers: dict[str, str]
-    key_slots: list[str]
-
-
-class ApiIn(BaseModel):
-    name: str = Field(min_length=1, max_length=40)
-    description: str = Field(min_length=1, max_length=500)
-    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
-    url: str = Field(min_length=8, max_length=2048)
-    # Values may name key slots like "Bearer {shop_token}"; never put a real key here.
-    headers: dict[str, str] = Field(default_factory=dict)
-
-
 class BotDetail(BotSummary):
     system_prompt: str
     language: str
     model_tier: str
     recommended_model: str | None
-    apis: list[ApiOut]
     allowed_users: list[AllowedUserOut]
     # How many people use the bot and in how many groups; never what they say (SPEC 8.7).
     users_count: int

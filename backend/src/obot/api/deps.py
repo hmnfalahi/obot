@@ -12,7 +12,7 @@ from obot.bots.access import can_use
 from obot.bots.service import get_or_create_user
 from obot.core.llm import ModelRegistry
 from obot.crypto import TokenCipher
-from obot.db.models import ApiEndpoint, Bot, BotStatus, Task, User
+from obot.db.models import Bot, BotStatus, Task, User
 
 
 @dataclass
@@ -94,14 +94,3 @@ async def owned_task(task_id: int, user: CurrentUser, session: Session) -> Task:
 
 
 OwnedTask = Annotated[Task, Depends(owned_task)]
-
-
-async def owned_api(api_id: int, user: CurrentUser, session: Session) -> ApiEndpoint:
-    row = await session.get(ApiEndpoint, api_id)
-    bot = await session.get(Bot, row.bot_id, options=[joinedload(Bot.owner)]) if row else None
-    if row is None or bot is None or bot.owner_id != user.id:
-        raise HTTPException(404, "api not found")
-    return row
-
-
-OwnedApi = Annotated[ApiEndpoint, Depends(owned_api)]
