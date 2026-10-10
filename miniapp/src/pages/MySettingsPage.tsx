@@ -6,7 +6,7 @@ import { useI18n } from '../i18n'
 import { haptic } from '../telegram'
 import { ErrorBox, Loading } from '../ui'
 
-/** The user's own settings for one bot they use: their key and model, and a daily cap. */
+/** The user's own settings for one bot they use: their key and model. */
 export function MySettingsPage({ id, navigate }: { id: number; navigate: (r: Route) => void }) {
   const mine = useLoad(() => api.mine(id), [id])
 
@@ -27,7 +27,6 @@ function Form({
   const { t } = useI18n()
   const [provider, setProvider] = useState<Provider | ''>(settings.key_provider ?? '')
   const [model, setModel] = useState(settings.model ?? settings.recommended_model ?? '')
-  const [cap, setCap] = useState(settings.daily_credit_cap?.toString() ?? '')
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | string>('idle')
 
   const save = async () => {
@@ -37,7 +36,6 @@ function Form({
         await api.putMine(settings.bot_id, {
           key_provider: provider || null,
           model: provider ? model.trim() : null,
-          daily_credit_cap: cap ? Number(cap) : null,
         }),
       )
       setStatus('saved')
@@ -97,8 +95,6 @@ function Form({
             />
           </>
         )}
-        <label>{t('dailyCap')}</label>
-        <input inputMode="numeric" value={cap} onChange={(e) => setCap(e.target.value.replace(/\D/g, ''))} />
         <button
           className="btn block"
           disabled={status === 'saving' || (provider !== '' && !model.trim())}

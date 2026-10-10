@@ -35,7 +35,7 @@ FULL_RECALL_LIMIT = 20
 SEARCH_RECALL_LIMIT = 5
 # Extraction is background work: it stops when the payer cannot pay, not when the
 # daily message count is used up.
-BLOCKING_REASONS = {QuotaReason.BOT_DAILY_CAP, QuotaReason.NO_CREDITS}
+BLOCKING_REASONS = {QuotaReason.NO_CREDITS}
 
 
 async def extract_pending(
@@ -64,7 +64,7 @@ async def extract_scope(
         bot = await session.get(Bot, scope.bot_id, options=[joinedload(Bot.owner)])
         payer = await memory_payer(session, scope)
         if payer is not None:
-            quota = await check_llm_quota(session, pricing, payer, bot, datetime.now(UTC))
+            quota = await check_llm_quota(session, pricing, payer, datetime.now(UTC))
             if quota.reason in BLOCKING_REASONS:
                 return
 

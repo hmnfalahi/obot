@@ -209,9 +209,7 @@ async def _run_chain(
         byok = await _uses_own_key(session, runtime, step_bot, payer)
         if index > 0 or step_bot is not bot_record:
             # execute_task checked the task's own bot before its first step.
-            quota = await check_llm_quota(
-                session, runtime.pricing, payer, step_bot, started, byok=byok
-            )
+            quota = await check_llm_quota(session, runtime.pricing, payer, started, byok=byok)
             if not quota.allowed:
                 raise StepFailed(index, step_bot.username, f"quota: {quota.reason}")
         prompt = step_prompt(task, index, output, language)
@@ -290,9 +288,7 @@ async def execute_task(runtime: Runtime, task_id: int, started: datetime) -> Non
                 return
 
             byok = await _uses_own_key(session, runtime, bot_record, user)
-            quota = await check_llm_quota(
-                session, runtime.pricing, user, bot_record, started, byok=byok
-            )
+            quota = await check_llm_quota(session, runtime.pricing, user, started, byok=byok)
             if not quota.allowed:
                 await record_run(session, task, started, error=f"quota: {quota.reason}")
                 await session.commit()

@@ -113,7 +113,6 @@ class MySettingsOut(BaseModel):
     recommended_model: str | None
     key_provider: Provider | None
     model: str | None
-    daily_credit_cap: int | None
     wallet: list[Provider]
 
 
@@ -121,7 +120,6 @@ class MySettingsIn(BaseModel):
     # None: answer with Obot's models (no own key).
     key_provider: Provider | None = None
     model: str | None = Field(default=None, pattern=f"^{MODEL_NAME.pattern}$")
-    daily_credit_cap: int | None = Field(default=None, ge=0)
 
 
 class BotDetail(BotSummary):

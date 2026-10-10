@@ -384,8 +384,6 @@ class UserBotSettings(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"), index=True)
-    # Credits this person lets the bot spend per day; None: no cap.
-    daily_credit_cap: Mapped[int | None] = mapped_column(BigInteger)
     # Their own key (from their wallet) and model for this bot; None: Obot's models.
     key_provider: Mapped[str | None] = mapped_column(String(16))
     model: Mapped[str | None] = mapped_column(String(128))

@@ -15,7 +15,6 @@ from obot.billing.usage import (
     start_of_day,
 )
 from obot.bots.service import ManagedBotInfo, get_or_create_user, register_managed_bot
-from obot.bots.users import bot_settings
 from obot.db.models import UsageKind
 
 PLANS_FILE = Path(__file__).parent.parent / "plans.yaml"
@@ -69,13 +68,13 @@ async def test_free_plan_daily_message_limit(session, cipher, pricing) -> None:
     now = datetime.now(UTC)
 
     for _ in range(2):
-        assert (await check_llm_quota(session, pricing, owner, bot, now)).allowed
+        assert (await check_llm_quota(session, pricing, owner, now)).allowed
         await record_llm_usage(session, pricing, owner, bot, MODEL, 100, 10)
 
-    decision = await check_llm_quota(session, pricing, owner, bot, now)
+    decision = await check_llm_quota(session, pricing, owner, now)
     assert decision.reason == QuotaReason.DAILY_MESSAGES
     tomorrow = now + timedelta(days=1)
-    assert (await check_llm_quota(session, pricing, owner, bot, tomorrow)).allowed
+    assert (await check_llm_quota(session, pricing, owner, tomorrow)).allowed
 
 
 async def test_daily_limit_is_shared_by_all_owner_bots(session, cipher, pricing) -> None:
@@ -84,21 +83,9 @@ async def test_daily_limit_is_shared_by_all_owner_bots(session, cipher, pricing)
     bot_b = await make_bot(session, cipher, tg_bot_id=2)
     await record_llm_usage(session, pricing, bot_a.owner, bot_a, MODEL, 100, 10)
 
-    decision = await check_llm_quota(session, pricing, bot_b.owner, bot_b, datetime.now(UTC))
+    decision = await check_llm_quota(session, pricing, bot_b.owner, datetime.now(UTC))
 
     assert decision.reason == QuotaReason.DAILY_MESSAGES
-
-
-async def test_daily_cap_is_each_persons_own(session, cipher, pricing) -> None:
-    bot = await make_bot(session, cipher)
-    ali = await get_or_create_user(session, 5005)
-    (await bot_settings(session, ali, bot)).daily_credit_cap = 30
-    await record_llm_usage(session, pricing, ali, bot, MODEL, 3000, 300)  # 30 credits
-
-    decision = await check_llm_quota(session, pricing, ali, bot, datetime.now(UTC))
-    assert decision.reason == QuotaReason.BOT_DAILY_CAP
-    # The owner set no cap of their own, and Ali's spending is not theirs.
-    assert (await check_llm_quota(session, pricing, bot.owner, bot, datetime.now(UTC))).allowed
 
 
 async def test_calls_are_paid_by_whoever_asked(session, cipher, pricing) -> None:
@@ -134,10 +121,10 @@ async def test_paid_plan_deducts_credits(session, cipher, pricing) -> None:
 
     assert event.credits == 30
     assert owner.credit_balance == 10
-    assert (await check_llm_quota(session, pricing, owner, bot, now)).allowed
+    assert (await check_llm_quota(session, pricing, owner, now)).allowed
     await record_llm_usage(session, pricing, owner, bot, MODEL, 3000, 300)
     assert owner.credit_balance == -20
-    decision = await check_llm_quota(session, pricing, owner, bot, now)
+    decision = await check_llm_quota(session, pricing, owner, now)
     assert decision.reason == QuotaReason.NO_CREDITS
 
 

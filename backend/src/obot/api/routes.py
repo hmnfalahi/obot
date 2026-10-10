@@ -344,7 +344,6 @@ async def _my_settings(session: Session, user: User, bot: Bot) -> MySettingsOut:
         recommended_model=bot.recommended_model,
         key_provider=settings.key_provider,
         model=settings.model,
-        daily_credit_cap=settings.daily_credit_cap,
         wallet=[row.provider for row in await wallet(session, user)],
     )
 
@@ -378,7 +377,6 @@ async def put_my_settings(
             raise HTTPException(422, e.failure.value) from e
     settings.key_provider = body.key_provider.value if body.key_provider else None
     settings.model = body.model if body.key_provider else None
-    settings.daily_credit_cap = body.daily_credit_cap
     await session.flush()
     return await _my_settings(session, user, bot)
 
