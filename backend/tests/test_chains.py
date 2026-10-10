@@ -12,7 +12,6 @@ from sqlalchemy.orm import joinedload
 
 from obot.billing.plans import ModelPrice, Pricing
 from obot.bots.service import ManagedBotInfo, register_managed_bot
-from obot.bots.users import bot_settings
 from obot.chat.history import ChatScope
 from obot.core.byok import Provider
 from obot.db.models import Bot, BotStatus, ScheduleKind, Task, UsageEvent
@@ -239,10 +238,10 @@ async def test_peer_steps_check_availability_and_quota(session, cipher) -> None:
         await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
 
     peer.status = BotStatus.ACTIVE
-    (await bot_settings(session, peer.owner, peer)).daily_credit_cap = 0
+    runtime.pricing.plans["free"].daily_llm_messages = 2  # the two own steps use it up
     with pytest.raises(StepFailed) as failed:
         await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
-    assert failed.value.reason == "quota: bot_daily_cap"
+    assert failed.value.reason == "quota: daily_messages"
     assert [name for name, _ in model.prompts].count("fr_bot") == 0
 
 
@@ -268,23 +267,16 @@ async def test_steps_of_another_owners_bot_never_run(session, cipher) -> None:
 async def test_a_peer_first_step_checks_its_quota(session, cipher) -> None:
     bot = await make_bot(session, cipher, 1, "news_bot")
     peer = await make_bot(session, cipher, 2, "fr_bot")
-    (await bot_settings(session, peer.owner, peer)).daily_credit_cap = 0
     task = await chain_of(session, bot, peer)
     task.steps = [task.steps[2], task.steps[0]]  # the peer goes first
     model = Scripted()
+    runtime = runtime_for(session, cipher, model)
+    runtime.pricing.plans["free"].daily_llm_messages = 0
 
     with pytest.raises(StepFailed) as failed:
-        await _run_chain(
-            session,
-            runtime_for(session, cipher, model),
-            task,
-            bot,
-            bot.owner,
-            NOW,
-            ChatScope(bot.id, OWNER),
-        )
+        await _run_chain(session, runtime, task, bot, bot.owner, NOW, ChatScope(bot.id, OWNER))
 
-    assert (failed.value.index, failed.value.reason) == (0, "quota: bot_daily_cap")
+    assert (failed.value.index, failed.value.reason) == (0, "quota: daily_messages")
     assert model.prompts == []
 
 

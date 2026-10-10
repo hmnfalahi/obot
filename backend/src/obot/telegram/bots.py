@@ -79,7 +79,7 @@ async def on_report(
 async def on_settings(
     message: Message, session: AsyncSession, bot_record: BotRecord, runtime: Runtime
 ) -> None:
-    """Own key, model and daily cap live in the panel, opened from the factory chat."""
+    """Own key and model live in the panel, opened from the factory chat."""
     if not await _allowed_in_private(message, bot_record, runtime):
         return
     lang = lang_of(message.from_user.language_code)
@@ -310,9 +310,7 @@ async def _respond(
             reply_to=inbound.message_id if group else None,
         )
         return
-    quota = await check_llm_quota(
-        session, runtime.pricing, payer, bot_record, now, byok=chosen.byok
-    )
+    quota = await check_llm_quota(session, runtime.pricing, payer, now, byok=chosen.byok)
     if not quota.allowed:
         await notify_quota_exhausted(inbound, bot_record, payer, quota.reason, runtime, now)
         return
@@ -443,12 +441,10 @@ async def notify_quota_exhausted(
     if not await first_today(runtime.redis, key, now, payer.timezone):
         return
     lang = lang_of(inbound.sender_language)
-    buttons = None
-    if reason != QuotaReason.BOT_DAILY_CAP:
-        top_up = InlineKeyboardButton(
-            text=t(lang, "btn.top_up"), url=f"https://t.me/{runtime.factory_username}?start=buy"
-        )
-        buttons = InlineKeyboardMarkup(inline_keyboard=[[top_up]])
+    top_up = InlineKeyboardButton(
+        text=t(lang, "btn.top_up"), url=f"https://t.me/{runtime.factory_username}?start=buy"
+    )
+    buttons = InlineKeyboardMarkup(inline_keyboard=[[top_up]])
     await runtime.sender.send_text(
         inbound.client,
         inbound.chat_id,

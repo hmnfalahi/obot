@@ -243,29 +243,21 @@ async def test_byok_replies_are_free_and_do_not_count_as_messages(session, ciphe
     assert await count_messages(session, owner, now.replace(year=2000)) == 0
 
 
-async def test_byok_ignores_message_limit_and_balance_but_not_the_bot_cap(
-    session, cipher, pricing
-) -> None:
+async def test_byok_ignores_message_limit_and_balance(session, cipher, pricing) -> None:
     bot = await make_bot(session, cipher)
     owner = bot.owner
     now = datetime.now(UTC)
     for _ in range(pricing.plan("free").daily_llm_messages):
         await record_llm_usage(session, pricing, owner, bot, MODEL, 10, 10)
 
-    assert (await check_llm_quota(session, pricing, owner, bot, now)).reason == (
+    assert (await check_llm_quota(session, pricing, owner, now)).reason == (
         QuotaReason.DAILY_MESSAGES
     )
-    assert (await check_llm_quota(session, pricing, owner, bot, now, byok=True)).allowed
+    assert (await check_llm_quota(session, pricing, owner, now, byok=True)).allowed
 
     owner.plan, owner.credit_balance = "paid", 0
-    assert (await check_llm_quota(session, pricing, owner, bot, now)).reason == (
-        QuotaReason.NO_CREDITS
-    )
-    assert (await check_llm_quota(session, pricing, owner, bot, now, byok=True)).allowed
-
-    (await bot_settings(session, owner, bot)).daily_credit_cap = 1
-    decision = await check_llm_quota(session, pricing, owner, bot, now, byok=True)
-    assert decision.reason == QuotaReason.BOT_DAILY_CAP
+    assert (await check_llm_quota(session, pricing, owner, now)).reason == (QuotaReason.NO_CREDITS)
+    assert (await check_llm_quota(session, pricing, owner, now, byok=True)).allowed
 
 
 # --- API ------------------------------------------------------------------------------------
@@ -296,7 +288,7 @@ async def test_a_user_picks_their_key_and_model_for_a_bot(api) -> None:
     url = f"/api/bots/{bot_id}/mine"
 
     before = (await api.get(url, headers=auth(BOB))).json()
-    body = {"key_provider": "anthropic", "model": "claude-sonnet-5.5", "daily_credit_cap": 50}
+    body = {"key_provider": "anthropic", "model": "claude-sonnet-5.5"}
     saved = await api.put(url, json=body, headers=auth(BOB))
 
     assert before["recommended_model"] == "claude-sonnet-5.5" and before["wallet"] == ["anthropic"]
@@ -305,7 +297,7 @@ async def test_a_user_picks_their_key_and_model_for_a_bot(api) -> None:
         "anthropic",
         "claude-sonnet-5.5",
     )
-    assert saved.json()["daily_credit_cap"] == 50 and not saved.json()["is_owner"]
+    assert not saved.json()["is_owner"]
     assert api.state.models.byok.checked == [("anthropic", "claude-sonnet-5.5", KEY)]
     alice_view = (await api.get(url, headers=auth(ALICE))).json()
     assert alice_view["key_provider"] is None  # settings are each person's own

@@ -2,7 +2,7 @@
 
 Every call is paid by its payer: whoever started the request (SPEC 8.7), not
 the bot's owner. Credits are computed for every call, also on the free plan, so
-daily caps work the same for everyone; they are only deducted on plans with
+the daily limits work the same for everyone; they are only deducted on plans with
 `uses_credits`. Replies on the payer's own key (BYOK) are free and do not count
 as messages; their tool calls are metered as usual. A payer of None means Obot
 pays (background work nobody asked for, like memory in groups).
@@ -18,13 +18,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from obot.billing.plans import Pricing
-from obot.db.models import Bot, UsageEvent, UsageKind, User, UserBotSettings
+from obot.db.models import Bot, UsageEvent, UsageKind, User
 
 
 class QuotaReason(enum.StrEnum):
     DAILY_MESSAGES = "daily_messages"
     DAILY_SEARCHES = "daily_searches"
-    BOT_DAILY_CAP = "bot_daily_cap"
     NO_CREDITS = "no_credits"
 
 
@@ -51,7 +50,6 @@ async def check_llm_quota(
     session: AsyncSession,
     pricing: Pricing,
     payer: User,
-    bot: Bot,
     now: datetime,
     *,
     byok: bool = False,
@@ -64,22 +62,6 @@ async def check_llm_quota(
         used = await count_messages(session, payer, since)
         if used >= plan.daily_llm_messages:
             return QuotaDecision(QuotaReason.DAILY_MESSAGES)
-
-    cap = await session.scalar(
-        select(UserBotSettings.daily_credit_cap).where(
-            UserBotSettings.user_id == payer.id, UserBotSettings.bot_id == bot.id
-        )
-    )
-    if cap is not None:
-        spent = await session.scalar(
-            select(func.coalesce(func.sum(UsageEvent.credits), 0)).where(
-                UsageEvent.payer_id == payer.id,
-                UsageEvent.bot_id == bot.id,
-                UsageEvent.created_at >= since,
-            )
-        )
-        if spent >= cap:
-            return QuotaDecision(QuotaReason.BOT_DAILY_CAP)
 
     if plan.uses_credits and payer.credit_balance <= 0 and not byok:
         return QuotaDecision(QuotaReason.NO_CREDITS)

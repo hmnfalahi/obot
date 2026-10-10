@@ -6,7 +6,6 @@ MESSAGES: dict[str, dict[str, str]] = {
             "You've used today's free messages. Top up credits to keep going, or come back "
             "tomorrow."
         ),
-        "quota.bot_daily_cap": "You've reached the daily limit you set for this bot.",
         "quota.no_credits": "You're out of credits. Top up to keep going.",
         "btn.top_up": "Top up",
         "factory.bot_limit": (
@@ -99,7 +98,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "To use me, start me in private first.",
         "task.draft": "⏰ New task: {summary}\nNext run: {when}\nSends to: {where}",
         "task.to_me": "you, here",
-        "bot.settings": "Your own key, model and daily limit for me are in your Obot panel.",
+        "bot.settings": "Your own key and model for me are in your Obot panel.",
         "btn.my_settings": "Open my settings",
         "factory.my_settings": "Your settings for that bot:",
         "bot.hello": (
@@ -232,7 +231,6 @@ MESSAGES: dict[str, dict[str, str]] = {
         "quota.daily_messages": (
             "پیام‌های رایگان امروزت تموم شده. برای ادامه اعتبار بخر یا فردا برگرد."
         ),
-        "quota.bot_daily_cap": "به سقف مصرف روزانه‌ای که برای این ربات گذاشتی رسیدی.",
         "quota.no_credits": "اعتبارت تموم شده. برای ادامه شارژ کن.",
         "btn.top_up": "شارژ",
         "factory.bot_limit": (
@@ -318,7 +316,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "group.start_first": "برای استفاده از من، اول توی پیوی استارتم کن.",
         "task.draft": "⏰ کار جدید: {summary}\nاجرای بعدی: {when}\nارسال به: {where}",
         "task.to_me": "خودت، همین‌جا",
-        "bot.settings": "کلید و مدل خودت و سقف مصرف روزانه‌ات برای من توی پنل Obot هست.",
+        "bot.settings": "کلید و مدل خودت برای من توی پنل Obot هست.",
         "btn.my_settings": "باز کردن تنظیماتم",
         "factory.my_settings": "تنظیمات تو برای اون ربات:",
         "bot.hello": (

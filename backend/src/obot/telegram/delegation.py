@@ -70,9 +70,7 @@ class Delegator:
             chosen = await reply_model(
                 session, runtime.models, runtime.cipher, runtime.pricing, callee, payer
             )
-            quota = await check_llm_quota(
-                session, runtime.pricing, payer, callee, now, byok=chosen.byok
-            )
+            quota = await check_llm_quota(session, runtime.pricing, payer, now, byok=chosen.byok)
             if not quota.allowed:
                 return f"ERROR: @{username} cannot answer right now (usage limit reached)."
 

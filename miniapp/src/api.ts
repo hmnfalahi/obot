@@ -98,14 +98,12 @@ export interface MySettings {
   recommended_model: string | null
   key_provider: Provider | null
   model: string | null
-  daily_credit_cap: number | null
   wallet: Provider[]
 }
 
 export interface MySettingsIn {
   key_provider: Provider | null
   model: string | null
-  daily_credit_cap: number | null
 }
 
 export type Visibility = 'private' | 'public'
@@ -131,7 +129,6 @@ export interface BotDetail extends BotSummary {
   language: string
   model_tier: string
   recommended_model: string | null
-  daily_credit_cap: number | null
   chats: Chat[]
 }
 
